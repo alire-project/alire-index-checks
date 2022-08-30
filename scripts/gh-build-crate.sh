@@ -219,9 +219,9 @@ for file in $CHANGES; do
       cd $(alr get --dirname $milestone)
 
       echo TEST LOG
-      echo ---8<---
+      echo '---8<---'
       cat alire/alr_test_*.log
-      echo ---8<---
+      echo '---8<---'
 
       echo LISTING EXECUTABLES of crate $milestone
       alr run --list
