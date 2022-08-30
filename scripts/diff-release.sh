@@ -6,11 +6,19 @@ trap 'echo "Interrupted" >&2 ; exit 1' INT
 set -o errexit
 set -o nounset
 
+# Import reusable bits
+pushd $( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+. common.sh
+popd
+
+# Required for aliases to work in non-interactive scripts
+shopt -s expand_aliases
+
 # Ensure all alr runs are non-interactive
 alias alr="alr -n"
 
 # Detect changes
-CHANGES=$(git diff --name-only HEAD~1)
+CHANGES=$( changed_manifests )
 
 # Bulk changes for the record
 echo Changed files: $CHANGES
@@ -34,6 +42,11 @@ function diff_one() {
     local crate=$(basename $file .toml | cut -f1 -d-)
     local version=$(basename $file .toml | cut -f2- -d-)
     local milestone="$crate=$version"
+
+    if [[ "$(echo $folder | cut -f1 -d/)" != "index" ]]; then
+        echo SKIPPING non-manifest file: $file
+        return
+    fi
 
     echo " "
     echo "------8<------"

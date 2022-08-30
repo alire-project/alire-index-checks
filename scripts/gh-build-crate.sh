@@ -6,6 +6,11 @@ trap 'echo "Interrupted" >&2 ; exit 1' INT
 set -o errexit
 set -o nounset
 
+# Import reusable bits
+pushd $( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+. common.sh
+popd
+
 # Required for aliases to work in non-interactive scripts
 shopt -s expand_aliases
 
@@ -13,7 +18,7 @@ shopt -s expand_aliases
 alias alr="alr -d -n"
 
 # Disable check for ownership that sometimes confuses docker-run git
-# Also, Github is not vulnerable to iCVE-2022-24765/CVE-2022-24767, see 
+# Also, Github is not vulnerable to iCVE-2022-24765/CVE-2022-24767, see
 # https://github.blog/2022-04-12-git-security-vulnerability-announced/
 git config --global --add safe.directory '*'
 
@@ -21,7 +26,7 @@ git config --global --add safe.directory '*'
 git log --graph --decorate --pretty=oneline --abbrev-commit --all | head -30
 
 # Detect changes
-CHANGES=$(git diff --name-only HEAD~1)
+CHANGES=$( changed_manifests )
 
 # Bulk changes for the record
 echo Changed files: $CHANGES
@@ -76,7 +81,11 @@ for file in $CHANGES; do
    version=$(basename $file .toml | cut -f2- -d-)
    version_noextras=$(echo $version | cut -f1 -d- | cut -f1 -d+)
    milestone="$crate=$version"
-   echo Testing crate: $milestone
+
+   echo
+   box "$milestone"
+   echo
+
    # Remember that version can be "external", in which case we do not know the
    # actual version, and indeed the test will only work if the external is the
    # newest version. This probably merits a way of being tested properly, but
