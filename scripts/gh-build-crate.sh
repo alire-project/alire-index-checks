@@ -208,11 +208,20 @@ for file in $CHANGES; do
       echo BUILD ENVIRONMENT
       alr printenv
 
-      echo BUILDING CRATE
-      alr build --release
-      # As normally dependencies/executables are built in release mode, we also
-      # check any submissions in this mode. Should we go overboard and check the
-      # three profile modes?
+      # To test, we use the regular `alr test`, reusing the download. In ths way,
+      # crates providing a test action may succeed even if not intended to be
+      # build directly.
+      echo TESTING CRATE
+      cd ..
+      alr test --redo $milestone
+
+      # Re-enter the deployment dir
+      cd $(alr get --dirname $milestone)
+
+      echo TEST LOG
+      echo ---8<---
+      cat alire/alr_test_*.log
+      echo ---8<---
 
       echo LISTING EXECUTABLES of crate $milestone
       alr run --list
