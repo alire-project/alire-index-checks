@@ -1,0 +1,10 @@
+name = "curl"
+description = "Command-line tool for transferring data with URL syntax"
+
+maintainers = ["alejandro@mosteo.com"]
+maintainers-logins = ["mosteo"]
+
+[[external]]
+kind = "system"
+[external.origin."case(distribution)"]
+"..." = ["curl"]
