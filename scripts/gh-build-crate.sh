@@ -213,12 +213,17 @@ for file in $CHANGES; do
       # build directly.
       echo TESTING CRATE
       cd ..
-      alr test --redo $milestone
+      failed=false
+      alr test --redo $milestone || failed=true
 
       # Re-enter the deployment dir
       cd $(alr get --dirname $milestone)
 
-      echo TEST LOG
+      if [[ "$failed" == "true" ]]; then
+         echo "TEST LOG (FAILURE)"
+      else
+         echo "TEST LOG (success)"
+      fi
       echo '---8<---'
       cat alire/alr_test_*.log
       echo '---8<---'
