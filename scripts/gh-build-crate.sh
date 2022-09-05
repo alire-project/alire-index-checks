@@ -214,19 +214,25 @@ for file in $CHANGES; do
       echo TESTING CRATE
       cd ..
       failed=false
-      alr test --redo $milestone || failed=true
+      # alr test --redo $milestone || failed=true
+      # Temporarily disabled so we build in release mode, which `alr test` currently can't
 
       # Re-enter the deployment dir
       cd $(alr get --dirname $milestone)
 
-      if [[ "$failed" == "true" ]]; then
-         echo "TEST LOG (FAILURE)"
-      else
-         echo "TEST LOG (success)"
-      fi
-      echo '---8<---'
-      cat alire/alr_test_*.log
-      echo '---8<---'
+      # Test the build (to be removed once `alr test` works in release mode)
+      alr build --release
+
+      # if [[ "$failed" == "true" ]]; then
+      #    echo "TEST LOG (FAILURE)"
+      # else
+      #    echo "TEST LOG (success)"
+      # fi
+      # echo '---8<---'
+      # cat alire/alr_test_*.log
+      # echo '---8<---'
+
+      [[ $failed == true ]] && { echo "Exiting with failed test"; exit 1; }
 
       echo LISTING EXECUTABLES of crate $milestone
       alr run --list
