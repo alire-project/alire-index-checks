@@ -61,7 +61,7 @@ function diff_one() {
 
         # For a first release, there's nothing to compare
         if [ $(ls $folder | grep -v external | wc -l) -eq 1 ]; then
-            echo NOTHING to diff against, first crate release
+            echo "NOTHING to diff against, first crate release ($milestone)"
             return 0
         fi
 
@@ -73,6 +73,9 @@ function diff_one() {
             echo ERROR extracting milestone:
             alr show "$crate<$version"
             return 1
+        elif [ "$prev_milestone" == "Not found" ]; then
+            echo "WARNING: release $milestone is first version-wise, no prior to compare against"
+            return 0
         fi
 
         # Convert into filename
