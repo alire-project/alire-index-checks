@@ -39,8 +39,10 @@ alr toolchain --disable-assistant
 alr version
 
 # Configure local index. For the case where two consecutive tests are attempted
-# (e.g. macOS -/+ Homebrew), try to remove it first
-alr index --del local || echo "Local index not yet configured, not removing"
+# (e.g. macOS -/+ Homebrew), remove it first
+if alr index | cut -f1 -d' ' | grep -q local; then
+   alr index --del local || echo "Local index not yet configured, not removing"
+fi
 alr index --name local --add ./index
 
 # Remove community index in case it has been added before
@@ -202,10 +204,11 @@ for file in $CHANGES; do
    elif $is_binary; then
       echo FETCHED BINARY crate OK
    else
-      echo FETCHED SOURCE crate OK, deployed at $(alr get --dirname $milestone)
+      release_base=$(alr get --dirname $milestone)
+      echo FETCHED SOURCE crate OK, deployed at $release_base
 
       # Enter the deployment dir silencing any warnings
-      cd $(alr -q get --dirname $milestone)
+      pushd $release_base
 
       echo BUILD ENVIRONMENT
       alr printenv
@@ -214,13 +217,13 @@ for file in $CHANGES; do
       # crates providing a test action may succeed even if not intended to be
       # build directly.
       echo TESTING CRATE
-      cd ..
+      popd
       failed=false
       # alr test --redo $milestone || failed=true
       # Temporarily disabled so we build in release mode, which `alr test` currently can't
 
       # Re-enter the deployment dir
-      cd $(alr get --dirname $milestone)
+      pushd $release_base
 
       # Test the build (to be removed once `alr test` works in release mode)
       alr build --release
@@ -239,7 +242,11 @@ for file in $CHANGES; do
       echo LISTING EXECUTABLES of crate $milestone
       alr run --list
 
-      cd ..
+      popd
+
+      # Clean-up latest test to free space for more tests to come in the same commit
+      echo "Freeing up $(du -sh $release_base) used by $milestone"
+      rm -rf ./$release_base
    fi
 
    echo CRATE $milestone TEST ENDED SUCCESSFULLY
