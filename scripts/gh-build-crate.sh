@@ -203,6 +203,10 @@ for file in $CHANGES; do
       alr show --external-detect $milestone
    elif $is_binary; then
       echo FETCHED BINARY crate OK
+      # Clean-up latest test to free space for more tests to come in the same commit
+      release_base=$(alr get --dirname $milestone)
+      echo "Freeing up $(du -sh $release_base | cut -f1) used by $milestone"
+      rm -rf ./$release_base
    else
       release_base=$(alr get --dirname $milestone)
       echo FETCHED SOURCE crate OK, deployed at $release_base
