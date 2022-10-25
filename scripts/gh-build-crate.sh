@@ -245,7 +245,7 @@ for file in $CHANGES; do
       popd
 
       # Clean-up latest test to free space for more tests to come in the same commit
-      echo "Freeing up $(du -sh $release_base) used by $milestone"
+      echo "Freeing up $(du -sh $release_base | cut -f1) used by $milestone"
       rm -rf ./$release_base
    fi
 
