@@ -16,6 +16,7 @@ shopt -s expand_aliases
 
 # Ensure all alr runs are non-interactive and able to output unexpected errors
 alias alr="alr -d -n"
+alias pacman="pacman --noconfirm"
 
 # Disable check for ownership that sometimes confuses docker-run git
 # Also, Github is not vulnerable to iCVE-2022-24765/CVE-2022-24767, see
@@ -140,7 +141,10 @@ for file in $CHANGES; do
    if grep -iq 'origin: system' <<< $solution; then
       echo "UPDATING system repositories with sudo from user ${USERNAME:-unset} ($UID:-unset)..."
       type apt-get 2>/dev/null && sudo apt-get update || true
-      type pacman  2>/dev/null && sudo pacman -Syy    || true
+
+      # In Arch case, eventually signatures become trustless and we need to refresh
+      type pacman  2>/dev/null && sudo pacman -S archlinux-keyring || true # Won't apply to msys2?
+      type pacman  2>/dev/null && sudo pacman -Syy || true
    else
       echo No need to update system repositories
    fi
