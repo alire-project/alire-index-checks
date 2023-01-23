@@ -32,6 +32,12 @@ CHANGES=$( changed_manifests )
 # Bulk changes for the record
 echo Changed files: $CHANGES
 
+# Enable Homebrew on macOS
+[ `uname -s` == "Darwin" ] && {
+   eval $(brew shellenv)
+   echo "Homebrew for macOS enabled"
+}
+
 # Disable assistant. This is necessary despite the setup-alire action doing it
 # too, because we sometimes run inside a Docker with fresh configuration
 alr toolchain --disable-assistant
