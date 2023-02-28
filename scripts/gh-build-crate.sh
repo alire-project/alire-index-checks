@@ -18,6 +18,12 @@ shopt -s expand_aliases
 alias alr="alr -d -n"
 alias pacman="pacman --noconfirm"
 
+# Configure `sh` to be Bourne-compatible or some `configure` scripts may fail
+[ `uname -s` == "Linux" ] && {
+   sudo chsh -s /bin/bash $(whoami)
+   echo Configured Bash as default shell for user $(whoami)
+}
+
 # Disable check for ownership that sometimes confuses docker-run git
 # Also, Github is not vulnerable to iCVE-2022-24765/CVE-2022-24767, see
 # https://github.blog/2022-04-12-git-security-vulnerability-announced/
