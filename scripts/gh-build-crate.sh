@@ -20,8 +20,9 @@ alias pacman="pacman --noconfirm"
 
 # Configure `sh` to be Bourne-compatible or some `configure` scripts may fail
 [ `uname -s` == "Linux" ] && {
-   sudo chsh -s /bin/bash $(whoami)
-   echo Configured Bash as default shell for user $(whoami)
+   sudo ln -fs $(which bash) /bin/sh
+   sudo ln -fs $(which bash) /usr/bin/sh
+   echo Configured Bash as default shell system-wide
 }
 
 # Disable check for ownership that sometimes confuses docker-run git
