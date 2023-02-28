@@ -16,7 +16,6 @@ shopt -s expand_aliases
 
 # Ensure all alr runs are non-interactive and able to output unexpected errors
 alias alr="alr -d -n"
-alias pacman="pacman --noconfirm"
 
 # Configure `sh` to be Bourne-compatible or some `configure` scripts may fail
 [ `uname -s` == "Linux" ] && {
@@ -153,11 +152,11 @@ for file in $CHANGES; do
    # either as dependency or as the crate being tested.
    if grep -iq 'origin: system' <<< $solution; then
       echo "UPDATING system repositories with sudo from user ${USERNAME:-unset} ($UID:-unset)..."
-      type apt-get 2>/dev/null && sudo apt-get update || true
+      type apt-get 2>/dev/null && sudo apt-get update -y || true
 
       # In Arch case, eventually signatures become trustless and we need to refresh
-      type pacman  2>/dev/null && sudo pacman -S archlinux-keyring || true # Won't apply to msys2?
-      type pacman  2>/dev/null && sudo pacman -Syy || true
+      type pacman 2>/dev/null && sudo pacman -S archlinux-keyring --no-confirm || true # Won't apply to msys2?
+      type pacman 2>/dev/null && sudo pacman -Syy --no-confirm || true
    else
       echo No need to update system repositories
    fi
