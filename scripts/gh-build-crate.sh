@@ -155,8 +155,8 @@ for file in $CHANGES; do
       type apt-get 2>/dev/null && sudo apt-get update -y || true
 
       # In Arch case, eventually signatures become trustless and we need to refresh
-      type pacman 2>/dev/null && sudo pacman -S archlinux-keyring --no-confirm || true # Won't apply to msys2?
-      type pacman 2>/dev/null && sudo pacman -Syy --no-confirm || true
+      type pacman 2>/dev/null && sudo pacman -S archlinux-keyring --noconfirm || true # Won't apply to msys2?
+      type pacman 2>/dev/null && sudo pacman -Syy --noconfirm || true
    else
       echo No need to update system repositories
    fi
