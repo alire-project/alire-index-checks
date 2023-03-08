@@ -19,8 +19,8 @@ alias alr="alr -d -n"
 
 # Configure `sh` to be Bourne-compatible or some `configure` scripts may fail
 [ `uname -s` == "Linux" ] && {
-   sudo ln -fs $(which bash) /bin/sh
-   sudo ln -fs $(which bash) /usr/bin/sh
+   sudo ln -fs $(type -p bash) /bin/sh
+   sudo ln -fs $(type -p bash) /usr/bin/sh
    echo Configured Bash as default shell system-wide
 }
 
