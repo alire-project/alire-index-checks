@@ -248,6 +248,17 @@ for file in $CHANGES; do
       # Test the build (to be removed once `alr test` works in release mode)
       alr build --release
 
+      # If there is a test* folder containing an alire.toml, `alr run` it.
+      # This is temporary until `alr test` works in release mode.
+      # TODO: remove this once `alr test` works in release mode.
+      find . -iwholename ./'test*'/alire.toml | while read testcrate
+      do
+         echo RUNNING TESTS AT $testcrate
+         pushd $(dirname $testcrate)
+         alr run || failed=true
+         popd
+      done
+
       # if [[ "$failed" == "true" ]]; then
       #    echo "TEST LOG (FAILURE)"
       # else
