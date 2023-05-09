@@ -101,7 +101,7 @@ for file in $CHANGES; do
       fi
    done
 
-   fail FAILED: PR author is not in the list of maintainers of $milestone
+   fail FAILED: PR author is not in the list of maintainers of $previous
 
 done
 
