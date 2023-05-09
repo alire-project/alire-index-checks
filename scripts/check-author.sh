@@ -95,7 +95,7 @@ for file in $CHANGES; do
    for maint in $(alr show $previous | grep Maintainers_Logins: | cut -f2 -d: | tr -d ' '); do
       if [[ $maint = $PR_AUTHOR ]]; then
          echo SUCCESS: PR author $PR_AUTHOR is in the list of maintainers
-         break
+         continue 2 # Skip to next milestone
       else
          echo Maintainer $maint does not match PR author $PR_AUTHOR
       fi
