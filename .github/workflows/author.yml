@@ -24,9 +24,10 @@ jobs:
       uses: alire-project/setup-alire@v2
       with:
         version: nightly
+        toolchain: --disable-assistant # no need for it
 
     - name: Test crate
-      run: ${{env.CHECKS_REPO}}/scripts/gh-build-crate.sh ${{ github.event.pull_request.user.login }}
+      run: ${{env.CHECKS_REPO}}/scripts/check-author.sh ${{ github.event.pull_request.user.login }}
       shell: bash
       env:
         ALL_CRATES: TRUE
