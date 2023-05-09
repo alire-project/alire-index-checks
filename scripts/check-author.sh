@@ -78,13 +78,13 @@ for file in $CHANGES; do
 
    if [[ $version = external ]]; then
       echo SKIPPING check for external crate $milestone
-      exit 0
+      continue
    fi
 
    # If there is no previous version, there's no test to perform
    if alr show $previous | grep -q "Not found"; then
       echo SKIPPING check for first release $milestone
-      exit 0
+      continue
    fi
 
    # Show all maintainers for the record (using previous release)
