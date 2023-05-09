@@ -87,8 +87,9 @@ for file in $CHANGES; do
       exit 0
    fi
 
-   # Show all maintainers for the record
+   # Show all maintainers for the record (using previous release)
    echo $previous maintainers are:
+   alr show $previous | head -1
    alr show $previous | grep Maintainers_Logins
 
    for maint in $(alr show $previous | grep Maintainers_Logins: | cut -f2 -d: | tr -d ' '); do
