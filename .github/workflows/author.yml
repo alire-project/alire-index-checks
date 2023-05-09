@@ -1,0 +1,32 @@
+name: Check author
+# Check author of changes is in maintainers
+
+on:
+  pull_request:
+
+env:
+  CHECKS_REPO: .
+
+jobs:
+
+  author:
+    name: Check author
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out
+      uses: actions/checkout@v2
+      with:
+        fetch-depth: 0
+
+    - name: Set up `alr`
+      uses: alire-project/setup-alire@v2
+      with:
+        version: nightly
+
+    - name: Test crate
+      run: ${{env.CHECKS_REPO}}/scripts/gh-build-crate.sh ${{ github.event.pull_request.user.login }}
+      shell: bash
+      env:
+        ALL_CRATES: TRUE
