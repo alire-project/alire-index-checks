@@ -28,3 +28,12 @@ function fail() {
         echo "DRY_RUN set, continuing"
     fi
 }
+
+function exists_in_base() {
+    # Check whether $1 exists in the base commit
+    if [[ -n $(git ls-tree HEAD~1 --name-only "$1") ]]; then
+        return 0
+    else
+        return 1
+    fi
+}

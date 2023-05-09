@@ -81,6 +81,15 @@ for file in $CHANGES; do
       continue
    fi
 
+   # If the file already existed, we can't be sure that the maintainers aren't
+   # being modified without going into previous index commits. For now, we
+   # simply fail as it is not usual to modify existing manifests. This ensures
+   # than when adding a new crate, all previous ones aren't modified to change
+   # maintainers there.
+   if exists_in_base $file; then
+      fail "FAILED: modified $file already existed; ensure manually no maintainers were modified"
+   fi
+
    # If there is no previous version, there's no test to perform
    if alr show $previous | grep -q "Not found"; then
       echo SKIPPING check for first release $milestone
