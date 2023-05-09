@@ -101,8 +101,7 @@ for file in $CHANGES; do
       fi
    done
 
-   echo FAILED: PR author is not in the list of maintainers of $milestone
-   exit 1
+   fail FAILED: PR author is not in the list of maintainers of $milestone
 
 done
 

@@ -29,3 +29,4 @@ jobs:
       shell: bash
       env:
         ALL_CRATES: TRUE
+        DRY_RUN: TRUE

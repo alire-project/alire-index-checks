@@ -17,3 +17,14 @@ function changed_manifests() {
         git diff --name-only HEAD~1
     fi
 }
+
+function fail() {
+    # Fail if not DRY_RUN is set, otherwise just print the $1 error
+    if [[ "${DRY_RUN:-unset}" == "unset" ]]; then
+        echo $@
+        exit 1
+    else
+        echo $@
+        echo "DRY_RUN set, continuing"
+    fi
+}
