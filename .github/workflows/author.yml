@@ -1,0 +1,32 @@
+name: Maintainer
+# Check author of changes is in maintainers
+
+on:
+  pull_request:
+
+env:
+  CHECKS_REPO: .
+
+jobs:
+
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out
+      uses: actions/checkout@v2
+      with:
+        fetch-depth: 0
+
+    - name: Set up `alr`
+      uses: alire-project/setup-alire@v2
+      with:
+        version: nightly
+        toolchain: --disable-assistant # no need for it
+
+    - name: Test crates
+      run: ${{env.CHECKS_REPO}}/scripts/check-author.sh ${{ github.event.pull_request.user.login }}
+      shell: bash
+      env:
+        ALL_CRATES: TRUE
+        DRY_RUN: TRUE
