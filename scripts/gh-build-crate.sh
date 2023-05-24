@@ -225,7 +225,14 @@ for file in $CHANGES; do
       rm -rf ./$release_base
    else
       release_base=$(alr get --dirname $milestone)
-      echo FETCHED SOURCE crate OK, deployed at $release_base
+      # This is where the release really is, even for monorepos
+
+      release_deploy=$(echo "$release_base" | cut -f1 -d/ | cut -f1 -d'\')
+      # This is where the repo is deployed, which for monorepos will not be the
+      # same as the `release_base` above. It's always the top-level directory
+      # of the `release_base` path
+
+      echo FETCHED SOURCE crate OK, deployed at $release_base with root at $release_deploy
 
       # Enter the deployment dir silencing any warnings
       pushd $release_base
@@ -280,8 +287,8 @@ for file in $CHANGES; do
       popd
 
       # Clean-up latest test to free space for more tests to come in the same commit
-      echo "Freeing up $(du -sh $release_base | cut -f1) used by $milestone"
-      rm -rf ./$release_base
+      echo "Freeing up $(du -sh $release_deploy | cut -f1) used by $milestone at $release_deploy"
+      rm -rf ./$release_deploy
    fi
 
    echo CRATE $milestone TEST ENDED SUCCESSFULLY
