@@ -252,6 +252,8 @@ for file in $CHANGES; do
       # Re-enter the deployment dir
       pushd $release_base
 
+      echo Building with $(alr exec -- gnat --version) ...
+
       # Test the build (to be removed once `alr test` works in release mode)
       alr build --release
 
