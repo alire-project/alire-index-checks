@@ -113,6 +113,19 @@ for file in $CHANGES; do
       milestone=$crate
    fi
 
+   # Skip on explicit unavailability
+   if alr show --system $milestone | grep -q 'Available when: False'; then
+      echo SKIPPING crate build: $milestone UNAVAILABLE on system
+      continue
+   fi
+
+   # This is a failure that should not happen.
+   # TODO: remove when fixed in alr
+   if alr show --system $milestone 2>&1 | grep -q 'Binary archive is unavailable'; then
+      echo SKIPPING crate build: $milestone UNAVAILABLE on system
+      continue
+   fi
+
    # Show info for the record
    echo PLATFORM-INDEPENDENT CRATE INFO $milestone
    alr show $milestone
@@ -133,12 +146,6 @@ for file in $CHANGES; do
    if grep -q 'Pins (direct)' <<< $crateinfo ; then
       echo "FAIL: release $milestone manifest contains pins"
       exit 1
-   fi
-
-   # Skip on explicit unavailability
-   if alr show --system $milestone | grep -q 'Available when: False'; then
-      echo SKIPPING crate build: $milestone UNAVAILABLE on system
-      continue
    fi
 
    # In unsupported platforms, externals are properly reported as missing. We
