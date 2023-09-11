@@ -272,10 +272,12 @@ for file in $CHANGES; do
          echo RUNNING TESTS AT $testcrate
          pushd $(dirname $testcrate)
          alr run || failed=true
-         [[ $failed == true ]] && {
+         if [[ $failed == true ]]; then
             echo "Exiting with failed test at $testcrate"
             exit 1
-         }
+         else
+            echo "Test via `alr run` at $testcrate succeeded"
+         fi
          popd
       done
 
