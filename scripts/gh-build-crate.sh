@@ -91,6 +91,11 @@ for file in $CHANGES; do
       continue
    fi
 
+   if ! grep -q '^index/' <<< $file; then
+      echo Skipping file outside of index hierarchy: $file
+      continue
+   fi
+
    # Checks passed, this is a crate we must test
    is_system=false
 
