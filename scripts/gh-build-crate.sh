@@ -15,7 +15,7 @@ popd
 shopt -s expand_aliases
 
 # Ensure all alr runs are non-interactive and able to output unexpected errors
-alias alr="alr -d -n"
+alias alr="alr -d -n --no-tty"
 
 # Configure `sh` to be Bourne-compatible or some `configure` scripts may fail
 [ `uname -s` == "Linux" ] && {
@@ -68,10 +68,17 @@ env
 echo STRICT MODE index checks
 alr index --check
 
-# Check no warning during index loading.
-# Such a warning would also happen during `alr printenv`, breaking it.
-# TODO: remove after old license deprecation.
-alr search --crates 2>&1 | grep "Warning:" && exit 1
+echo INDEX WARNING during loading check
+# Check no warning during index loading, unless we are warning about a too old
+# index version when using a development version of alr (which may be being
+# tested with an old index)
+
+# If '-' is found in alr --version, then it is a development version
+if alr --version | grep -q '-' ; then
+   alr config --global --set warning.old_index false
+fi
+
+alr index --check 2>&1 | grep "Warning:" && exit 1
 
 # Test crate
 for file in $CHANGES; do
