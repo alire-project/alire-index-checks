@@ -27,8 +27,11 @@ echo Changed files: $CHANGES
 # too, because we sometimes run inside a Docker with fresh configuration
 alr toolchain --disable-assistant
 
-# Configure index
-alr index --del local >/dev/null || true # Simplifies local testing
+# Configure local index. For the case where two consecutive tests are attempted
+# (e.g. macOS -/+ Homebrew), remove it first
+if alr index | cut -f1 -d' ' | grep -q local; then
+   alr index --del local || echo "Local index not yet configured, not removing"
+fi
 alr index --name local --add ./index
 
 # Remove community index in case it has been added before
