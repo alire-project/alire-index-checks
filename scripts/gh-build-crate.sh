@@ -219,7 +219,9 @@ for file in $CHANGES; do
 
    # Detect missing dependencies for clearer error
    if grep -q 'Dependencies cannot be met' <<< $solution ; then
-      echo FAIL: crate $milestone dependencies cannot be met
+      echo "FAIL: crate $milestone dependencies cannot be met"
+      echo "Note: you can either fix dependencies or use the \`available\`"
+      echo "      property to exclude platforms with missing dependencies."
       exit 1
    fi
 
