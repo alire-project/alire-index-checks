@@ -256,42 +256,37 @@ for file in $CHANGES; do
       # Enter the deployment dir silencing any warnings
       pushd $release_base
 
-      echo BUILD ENVIRONMENT
+      echo "BUILD ENVIRONMENT (root crate)"
       alr printenv
 
       # To test, we use the regular `alr test`, reusing the download. In ths way,
       # crates providing a test action may succeed even if not intended to be
       # build directly.
       echo TESTING CRATE
-      popd
       failed=false
-      # alr test --redo $milestone || failed=true
-      # Temporarily disabled so we build in release mode, which `alr test` currently can't
+      alr test || failed=true
 
-      # Re-enter the deployment dir
-      pushd $release_base
+      # echo Building with $(alr exec -- gnat --version) ...
 
-      echo Building with $(alr exec -- gnat --version) ...
+      # # Test the build (to be removed once `alr test` works in release mode)
+      # alr build --release
 
-      # Test the build (to be removed once `alr test` works in release mode)
-      alr build --release
-
-      # If there is a test* folder containing an alire.toml, `alr run` it.
-      # This is temporary until `alr test` works in release mode.
-      # TODO: remove this once `alr test` works in release mode.
-      find . -iwholename ./'test*'/alire.toml | while read testcrate
-      do
-         echo RUNNING TESTS AT $testcrate
-         pushd $(dirname $testcrate)
-         alr run || failed=true
-         if [[ $failed == true ]]; then
-            echo "Exiting with failed test at $testcrate"
-            exit 1
-         else
-            echo "Test via `alr run` at $testcrate succeeded"
-         fi
-         popd
-      done
+      # # If there is a test* folder containing an alire.toml, `alr run` it.
+      # # This is temporary until `alr test` works in release mode.
+      # # TODO: remove this once `alr test` works in release mode.
+      # find . -iwholename ./'test*'/alire.toml | while read testcrate
+      # do
+      #    echo RUNNING TESTS AT $testcrate
+      #    pushd $(dirname $testcrate)
+      #    alr run || failed=true
+      #    if [[ $failed == true ]]; then
+      #       echo "Exiting with failed test at $testcrate"
+      #       exit 1
+      #    else
+      #       echo "Test via `alr run` at $testcrate succeeded"
+      #    fi
+      #    popd
+      # done
 
       # if [[ "$failed" == "true" ]]; then
       #    echo "TEST LOG (FAILURE)"
@@ -301,6 +296,16 @@ for file in $CHANGES; do
       # echo '---8<---'
       # cat alire/alr_test_*.log
       # echo '---8<---'
+
+      echo AVAILABLE LOGS
+      ls -l alire/alr_test_*.log
+
+      echo LOG CONTENTS
+      ls alire/alr_test_*.log | while read file; do
+         echo "---8<--- LOG FILE BEGIN: $file"
+         cat $file
+         echo "--->8--- LOG FILE END: $file"
+      done
 
       [[ $failed == true ]] && { echo "Exiting with failed test"; exit 1; }
 
