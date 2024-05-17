@@ -68,14 +68,14 @@ env
 echo STRICT MODE index checks
 alr index --check
 
-echo INDEX WARNING during loading check
+echo INDEX CHECK no warnings during loading
 # Check no warning during index loading, unless we are warning about a too old
 # index version when using a development version of alr (which may be being
 # tested with an old index)
 
 # If '-' is found in alr --version, then it is a development version
 if alr --version | grep -q '-' ; then
-   alr config --global --set warning.old_index false
+   alr settings --global --set warning.old_index false
 fi
 
 alr index --check 2>&1 | grep "Warning:" && exit 1
