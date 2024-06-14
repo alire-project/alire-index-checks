@@ -152,6 +152,9 @@ for file in $CHANGES; do
 
    echo CRATE DEPENDENCIES $milestone
    alr show --solve --detail --external-detect $milestone
+   echo CRATE DEPENDENCY TREE $milestone
+   alr show --tree --external-detect $milestone
+
    solution=$(alr show --solve --detail --external-detect $milestone)
 
    # Fail if there are pins in the manifest
@@ -180,14 +183,25 @@ for file in $CHANGES; do
       echo No need to update system repositories
    fi
 
+   gnat_configured=let_it_be # default meaning to don't touch it
+
    # Install an Alire-provided gprbuild whenever there is a non-external gnat in solution
    if grep -iq 'gnat_' <<< $solution && ! grep -iq 'gnat_external' <<< $solution; then
       gnat_dep=$(grep -E -o '^   gnat_[a-z0-9_]*=\S*' <<< $solution | tail -1 | xargs)
+      # -E for regex, -o for only the matched part, xargs to trim space
       gnat_dep=${gnat_dep:-gnat_native}
       if alr show $gnat_dep | grep 'Provides: gnat=' >/dev/null; then
+
+         # Check whether a gnat has been already configured to then reset it afterwards
+         if alr settings --global | grep -u toolchain.use.gnat=; then
+            gnat_configured=$(alr settings --global | grep -u toolchain.use.gnat= | cut -f2 -d=)
+         else
+            gnat_configured=none
+         fi
+
          echo "INSTALLING indexed toolchain compatible with $gnat_dep"
+         echo "(Note: previously configured GNAT was $gnat_configured)"
          alr toolchain --select $gnat_dep gprbuild
-         # -E for regex, -o for only the matched part, xargs to trim space
          # We must give both the gnat in the solution and gprbuild, so both are compatible
          # Even if we default to gnat_native, that would select the appropriate gprbuild
       else
@@ -270,35 +284,6 @@ for file in $CHANGES; do
 
       # echo Building with $(alr exec -- gnat --version) ...
 
-      # # Test the build (to be removed once `alr test` works in release mode)
-      # alr build --release
-
-      # # If there is a test* folder containing an alire.toml, `alr run` it.
-      # # This is temporary until `alr test` works in release mode.
-      # # TODO: remove this once `alr test` works in release mode.
-      # find . -iwholename ./'test*'/alire.toml | while read testcrate
-      # do
-      #    echo RUNNING TESTS AT $testcrate
-      #    pushd $(dirname $testcrate)
-      #    alr run || failed=true
-      #    if [[ $failed == true ]]; then
-      #       echo "Exiting with failed test at $testcrate"
-      #       exit 1
-      #    else
-      #       echo "Test via `alr run` at $testcrate succeeded"
-      #    fi
-      #    popd
-      # done
-
-      # if [[ "$failed" == "true" ]]; then
-      #    echo "TEST LOG (FAILURE)"
-      # else
-      #    echo "TEST LOG (success)"
-      # fi
-      # echo '---8<---'
-      # cat alire/alr_test_*.log
-      # echo '---8<---'
-
       echo AVAILABLE LOGS
       ls -l alire/alr_test_*.log
 
@@ -320,6 +305,22 @@ for file in $CHANGES; do
       echo "Freeing up $(du -sh $release_deploy | cut -f1) used by $milestone at $release_deploy"
       rm -rf ./$release_deploy
    fi
+
+   # Restore GNAT configuration if it was set before
+   case $gnat_configured in
+      let_it_be)
+         echo "Toolchain configuration was not touched, doing nothing"
+         ;;
+      none)
+         echo "Undoing toolchain configuration back to none"
+         alr settings --global --unset toolchain.use.gnat
+         alr settings --global --unset toolchain.use.gprbuild
+         ;;
+      *)
+         echo "Restoring toolchain to $gnat_configured"
+         alr toolchain --select $gnat_configured gprbuild
+         ;;
+   esac
 
    echo CRATE $milestone TEST ENDED SUCCESSFULLY
 done
