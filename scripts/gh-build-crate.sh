@@ -111,6 +111,8 @@ for file in $CHANGES; do
    version_noextras=$(echo $version | cut -f1 -d- | cut -f1 -d+)
    milestone="$crate=$version"
 
+   distro=$(alr version | grep distribution: | awk '{print $2}')
+
    echo
    box "$milestone"
    echo
@@ -165,8 +167,9 @@ for file in $CHANGES; do
 
    # In unsupported platforms, externals are properly reported as missing. We
    # can skip testing of such a crate since it will likely fail.
-   if grep -q 'Dependencies (external):' <<< $solution ; then
+   if grep -q 'Dependencies (missing):' <<< $solution ; then
       echo SKIPPING build for crate $milestone with MISSING external dependencies
+      apply_label "missing dependencies: $distro"
       continue
    fi
 
@@ -231,12 +234,12 @@ for file in $CHANGES; do
       continue
    fi
 
-   # Detect missing dependencies for clearer error
+   # Detect missing dependencies for clearer error (probably unreaachable due
+   # to previous check for missing externals)
    if grep -q 'Dependencies cannot be met' <<< $solution ; then
-      echo "FAIL: crate $milestone dependencies cannot be met"
-      echo "Note: you can either fix dependencies or use the \`available\`"
-      echo "      property to exclude platforms with missing dependencies."
-      exit 1
+      echo "SKIPPING build of crate $milestone with MISSING regular dependencies"
+      apply_label "missing dependencies: $distro"
+      continue
    fi
 
    # Actual checks
