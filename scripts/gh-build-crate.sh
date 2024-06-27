@@ -190,9 +190,20 @@ for file in $CHANGES; do
 
    # Install an Alire-provided gprbuild whenever there is a non-external gnat in solution
    if grep -iq 'gnat_' <<< $solution && ! grep -iq 'gnat_external' <<< $solution; then
-      gnat_dep=$(grep -E -o '^   gnat_[a-z0-9_]*=\S*' <<< $solution | tail -1 | xargs)
+      gnat_line=$(grep -E '^\s*gnat[a-z0-9_]*=\S*' <<< $solution | tail -1 | xargs)
       # -E for regex, -o for only the matched part, xargs to trim space
-      gnat_dep=${gnat_dep:-gnat_native}
+
+      echo "Detected GNAT information in solution: $gnat_line"
+      gnat_dep=$(echo $gnat_line | awk '{print $1}')
+      echo "Detected GNAT dependency in solution: $gnat_dep"
+
+      # Consolidate gnat as gnat_native
+      gnat_target=$(echo $gnat_dep | grep -Eo '^[^=]*')
+      [ "$gnat_target" == "gnat" ] && gnat_target=gnat_native
+      gnat_version=$(echo $gnat_dep | cut -f2 -d=)
+      gnat_dep=${gnat_target:-gnat_native}=${gnat_version}
+      echo "Final GNAT to be configured: ${gnat_dep}"
+
       if alr show $gnat_dep | grep 'Provides: gnat=' >/dev/null; then
 
          # Check whether a gnat has been already configured to then reset it afterwards
