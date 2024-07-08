@@ -70,12 +70,12 @@ function apply_label() {
     # This is more painful that using gh, but gh may not be available in Docker
     # images
 
-    # Create label first
+    # Create label first in case it doesn't exist
     curl -L -S -X POST \
         -H "Authorization: Bearer $GITHUB_TOKEN" \
         -H "Accept: application/vnd.github.v3+json" \
         -d "{\"name\":\"$LABEL\", \"color\":\"#FBAA04\", \"description\":\"\"}" \
-        "https://api.github.com/repos/$GITHUB_REPOSITORY/labels"
+        "https://api.github.com/repos/$GITHUB_REPOSITORY/labels" || true
 
     # Apply label
     curl -L -S -X POST \

@@ -17,6 +17,9 @@ shopt -s expand_aliases
 # Ensure all alr runs are non-interactive
 alias alr="alr -n"
 
+# Diagnose environment
+env | sort
+
 # Detect changes
 CHANGES=$( changed_manifests )
 
@@ -37,7 +40,11 @@ alr index --name local --add ./index
 # Remove community index in case it has been added before
 alr index --del community >/dev/null || true
 
-diff_opts=(--minimal -U0 --line-prefix "..| " --ignore-all-space --ignore-blank-lines --ignore-cr-at-eol)
+diff_opts=(--minimal -U0 --ignore-all-space --ignore-blank-lines --ignore-cr-at-eol)
+
+is_version_or_commit() {
+    [[ $1 =~ ^[+-](version|commit)[[:space:]]*= ]]
+}
 
 function diff_one() {
     local file="$1"
@@ -84,7 +91,34 @@ function diff_one() {
         # Convert into filename
         local prev_file=$folder/${prev_milestone//=/-}.toml
 
-        git diff --no-index "${diff_opts[@]}" -- $prev_file $file
+        diff_output=$(git diff --no-index "${diff_opts[@]}" -- $prev_file $file)
+        # Echo the diff, but prefix every line with "··|" to make it easier to
+        # see:
+        echo "$diff_output" | sed 's/^/··| /'
+
+        # If all actual diff lines are only changing version and commit, apply
+        # label of diff OK:
+
+        echo "AUTOMATIC REVIEW FOLLOWS:"
+
+        echo "$diff_output" | grep -E '^[+-]' | grep -Ev '^[+-]{3}' | while read -r line; do
+            if ! is_version_or_commit "$line"; then
+                echo "Note: non-trivial change detected, review manually:"
+                touch non_trivial # Can't use variables as we are in a subshell
+                echo "$line"
+                # apply_label "diff: review"
+                break
+            else
+                echo "Note: trivial change detected, skipping:"
+                echo "$line"
+            fi
+        done
+
+        # Depending on minimal value, apply label
+        if [[ ! -f non_trivial ]]; then
+            echo "Note: minimal changes, marking diff OK"
+            # apply_label "diff: OK"
+        fi
     fi
 
     return 0
