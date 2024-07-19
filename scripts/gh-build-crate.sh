@@ -165,6 +165,14 @@ for file in $CHANGES; do
       exit 1
    fi
 
+   # Skip if unavailable (this case is specific to binary crates with no
+   # tarball for some combos of environment)
+   if grep -q 'Origin: (unavailable on current platform)' <<< $crateinfo ; then
+      echo SKIPPING build for crate $milestone with UNAVAILABLE binary origin
+      apply_label "unavailable: $distro"
+      continue
+   fi
+
    # In unsupported platforms, externals are properly reported as missing. We
    # can skip testing of such a crate since it will likely fail.
    if grep -q 'Dependencies (missing):' <<< $solution ; then
