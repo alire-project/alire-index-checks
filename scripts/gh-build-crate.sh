@@ -295,7 +295,12 @@ for file in $CHANGES; do
       pushd $release_base
 
       echo "BUILD ENVIRONMENT (root crate)"
-      alr printenv
+      # For crates with incomplete configuration this may still fail. The
+      # testing success will then depend on the crate having a proper test
+      # action defined.
+      alr printenv || {
+         echo "Failed to print environment. This may be expected if there are testing actions defined that override the default test build."
+      }
 
       # To test, we use the regular `alr test`, reusing the download. In ths way,
       # crates providing a test action may succeed even if not intended to be
