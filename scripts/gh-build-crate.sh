@@ -29,6 +29,19 @@ alias alr="alr -d -n --no-tty"
 # https://github.blog/2022-04-12-git-security-vulnerability-announced/
 git config --global --add safe.directory '*'
 
+# Move default alire cache dir for shorter paths
+# If on windows, explicitly give C:\temp as the cache dir, as other variables
+# result in old 8.3 names appearing, containing "~", which breaks msys2
+# installation.
+if [ "${WINDIR:-}" != "" ]; then
+   cachedir='C:\temp\ac'
+else
+   cachedir="/tmp/ac"
+fi
+mkdir -p "$cachedir"
+alr settings --global --set cache.dir "$cachedir"
+echo "Cache relocated to $cachedir"
+
 # See whats happening
 git log --graph --decorate --pretty=oneline --abbrev-commit --all | head -30
 
