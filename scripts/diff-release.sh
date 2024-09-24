@@ -42,8 +42,8 @@ alr index --del community >/dev/null || true
 
 diff_opts=(--minimal -U0 --ignore-all-space --ignore-blank-lines --ignore-cr-at-eol)
 
-is_version_or_commit() {
-    [[ $1 =~ ^[+-](version|commit)[[:space:]]*= ]]
+is_trivial_change() {
+    [[ $1 =~ ^[+-](version|commit|url)[[:space:]]*= ]]
 }
 
 function diff_one() {
@@ -102,7 +102,7 @@ function diff_one() {
         echo "AUTOMATIC REVIEW FOLLOWS:"
 
         echo "$diff_output" | grep -E '^[+-]' | grep -Ev '^[+-]{3}' | while read -r line; do
-            if ! is_version_or_commit "$line"; then
+            if ! is_trivial_change "$line"; then
                 echo "Note: non-trivial change detected, review manually:"
                 touch non_trivial # Can't use variables as we are in a subshell
                 echo "$line"
