@@ -42,7 +42,17 @@ mkdir -p "$cachedir"
 alr settings --global --set cache.dir "$cachedir"
 echo "Cache relocated to $cachedir"
 
+# However, keep toolchains at their default location, so no reinstall is needed
+# On Windows, this is a bit trickier and we must also reuse msys2:
+if [ "${WINDIR:-}" != "" ]; then
+   alr settings --global --set toolchain.dir "${LOCALAPPDATA:-${USERPROFILE:-$HOME}\\AppData\\Local}\\alire\\cache\\toolchains"
+   alr settings --global --set msys2.install_dir "${LOCALAPPDATA:-${USERPROFILE:-$HOME}\\AppData\\Local}\\alire\\cache\\msys64"
+else
+   alr settings --global --set toolchain.dir "$HOME/.local/share/alire/toolchains"
+fi
+
 # See whats happening
+echo GIT GRAPH
 git log --graph --decorate --pretty=oneline --abbrev-commit --all | head -30
 
 # Detect changes
@@ -61,9 +71,6 @@ echo Changed files: $CHANGES
 # too, because we sometimes run inside a Docker with fresh configuration
 alr toolchain --disable-assistant
 
-# Show alr metadata
-alr version
-
 # Configure local index. For the case where two consecutive tests are attempted
 # (e.g. macOS -/+ Homebrew), remove it first
 if alr index | cut -f1 -d' ' | grep -q local; then
@@ -75,7 +82,13 @@ alr index --name local --add ./index
 alr index --del community || true
 
 # Show environment for the record
+echo ENVIRONMENT
 env
+
+# Show alr metadata
+echo ALR METADATA
+alr version
+alr settings --global
 
 # Check index for obsolescent features
 echo STRICT MODE index checks
