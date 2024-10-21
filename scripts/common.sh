@@ -107,3 +107,12 @@ function post_comment() {
         -d "{\"body\":$COMMENT}" \
         "https://api.github.com/repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments"
 }
+
+function unset_alr_settings_key() {
+    # Unset a key in the global alr settings
+    local KEY=$1
+
+    if alr settings --global --get $KEY &> /dev/null; then
+        alr settings --global --unset $KEY
+    fi
+}

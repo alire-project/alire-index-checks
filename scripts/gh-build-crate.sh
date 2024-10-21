@@ -83,7 +83,7 @@ alr index --del community || true
 
 # Show environment for the record
 echo ENVIRONMENT
-env
+env | sort
 
 # Show alr metadata
 echo ALR METADATA
@@ -220,42 +220,11 @@ for file in $CHANGES; do
       echo No need to update system repositories
    fi
 
-   gnat_configured=let_it_be # default meaning to don't touch it
-
-   # Install an Alire-provided gprbuild whenever there is a non-external gnat in solution
-   if grep -iq 'gnat_' <<< $solution && ! grep -iq 'gnat_external' <<< $solution; then
-      gnat_line=$(grep -E '^\s*gnat[a-z0-9_]*=\S*' <<< $solution | tail -1 | xargs)
-      # -E for regex, -o for only the matched part, xargs to trim space
-
-      echo "Detected GNAT information in solution: $gnat_line"
-      gnat_dep=$(echo $gnat_line | awk '{print $1}')
-      echo "Detected GNAT dependency in solution: $gnat_dep"
-
-      # Consolidate gnat as gnat_native
-      gnat_target=$(echo $gnat_dep | grep -Eo '^[^=]*')
-      [ "$gnat_target" == "gnat" ] && gnat_target=gnat_native
-      gnat_version=$(echo $gnat_dep | cut -f2 -d=)
-      gnat_dep=${gnat_target:-gnat_native}=${gnat_version}
-      echo "Final GNAT to be configured: ${gnat_dep}"
-
-      if alr show $gnat_dep | grep 'Provides: gnat=' >/dev/null; then
-
-         # Check whether a gnat has been already configured to then reset it afterwards
-         if alr settings --global | grep -u toolchain.use.gnat=; then
-            gnat_configured=$(alr settings --global | grep -u toolchain.use.gnat= | cut -f2 -d=)
-         else
-            gnat_configured=none
-         fi
-
-         echo "INSTALLING indexed toolchain compatible with $gnat_dep"
-         echo "(Note: previously configured GNAT was $gnat_configured)"
-         alr toolchain --select $gnat_dep gprbuild
-         # We must give both the gnat in the solution and gprbuild, so both are compatible
-         # Even if we default to gnat_native, that would select the appropriate gprbuild
-      else
-         echo "Dependency $gnat_dep is not a GNAT compiler dependency, treating it as a regular crate"
-      fi
-   fi
+   # Here we previously detected gnat versions, trying to find whether some was
+   # external/cross, to select a compatible gprbuild, but this is brittle as
+   # the testing may be done in a subcrate which we are not aware of. Rather
+   # than trying to guess, we will run a set of combinations below, and if any
+   # of them passes, we will consider the test successful.
 
    # Detect whether the crate is binary to skip build
    is_binary=false
@@ -334,22 +303,82 @@ for file in $CHANGES; do
       # crates providing a test action may succeed even if not intended to be
       # build directly.
       echo TESTING CRATE
-      failed=false
-      alr test || failed=true
 
-      # echo Building with $(alr exec -- gnat --version) ...
+      # We try here two set-ups: with the default external toolchain, and with
+      # a toolchain provided by Alire. If either passes, we consider the crate
+      # buildable. For x-build crates, the external toolchain is bound to fail.
 
-      echo AVAILABLE LOGS
-      ls -l alire/alr_test_*.log
+      for toolchain_source in system indexed; do
 
-      echo LOG CONTENTS
-      ls alire/alr_test_*.log | while read file; do
-         echo "---8<--- LOG FILE BEGIN: $file"
-         cat $file
-         echo "--->8--- LOG FILE END: $file"
+         # If no system tools are available, we can skip the system toolchain.
+         if [[ $toolchain_source == system ]]; then
+            if ! gprbuild --version >/dev/null; then
+               echo "No system toolchain found, skipping system toolchain"
+               continue
+            fi
+         fi
+
+         echo "TOOLCHAIN SOURCE: $toolchain_source"
+
+         case $toolchain_source in
+            system)
+               # Unset toolchains
+               unset_alr_settings_key toolchain.use.gnat
+               unset_alr_settings_key toolchain.use.gprbuild
+               unset_alr_settings_key toolchain.external.gnat
+               ;;
+            indexed)
+               alr toolchain --select gnat_native gprbuild
+               # Even if we need a x-compiler, this guarantees the proper
+               # gprbuild will be used, and the x-compiler will be downloaded
+               # on demand.
+               ;;
+         esac
+
+         alr toolchain # for the record
+
+         failed=false
+         alr test || failed=true
+
+         # echo Building with $(alr exec -- gnat --version) ...
+
+         echo AVAILABLE LOGS
+         ls -l alire/alr_test_*.log
+
+         echo FULL LOG > full.log
+
+         echo LOG CONTENTS
+         ls alire/alr_test_*.log | while read file; do
+            echo "---8<--- LOG FILE BEGIN: $file"
+            cat $file | tee -a full.log
+            echo "--->8--- LOG FILE END: $file"
+         done
+
+         case $toolchain_source in
+            system)
+               echo "TEST RESULT with SYSTEM toolchain: failed=$failed"
+               if ! $failed; then
+                  echo "Test succeeded with system toolchain, skipping indexed toolchain"
+                  break
+               elif grep -q 'no compiler for language "Ada", cannot compile' full.log; then
+                  echo "No Ada compiler found, crate may require a cross-compiler"
+                  echo "Will try with an indexed toolchain next"
+               else
+                  # Error with the system compiler for unknown causes that we
+                  # want to report
+                  echo "Test failed with system toolchain, please review logs"
+                  exit 1
+               fi
+               ;;
+            indexed)
+               echo "TEST RESULT with INDEXED toolchain: failed=$failed"
+               if $failed; then
+                  echo "No more toolchain combos left to try, failing"
+                  exit 1
+               fi
+               ;;
+         esac
       done
-
-      [[ $failed == true ]] && { echo "Exiting with failed test"; exit 1; }
 
       echo LISTING EXECUTABLES of crate $milestone
       alr run --list
@@ -360,22 +389,6 @@ for file in $CHANGES; do
       echo "Freeing up $(du -sh $release_deploy | cut -f1) used by $milestone at $release_deploy"
       rm -rf ./$release_deploy
    fi
-
-   # Restore GNAT configuration if it was set before
-   case $gnat_configured in
-      let_it_be)
-         echo "Toolchain configuration was not touched, doing nothing"
-         ;;
-      none)
-         echo "Undoing toolchain configuration back to none"
-         alr settings --global --unset toolchain.use.gnat
-         alr settings --global --unset toolchain.use.gprbuild
-         ;;
-      *)
-         echo "Restoring toolchain to $gnat_configured"
-         alr toolchain --select $gnat_configured gprbuild
-         ;;
-   esac
 
    echo CRATE $milestone TEST ENDED SUCCESSFULLY
 done
