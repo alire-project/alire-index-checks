@@ -103,11 +103,9 @@ function diff_one() {
 
         echo "$diff_output" | grep -E '^[+-]' | grep -Ev '^[+-]{3}' | while read -r line; do
             if ! is_trivial_change "$line"; then
-                echo "Note: non-trivial change detected, review manually:"
+                echo "Note: non-trivial change detected, REVIEW manually:"
                 touch non_trivial # Can't use variables as we are in a subshell
                 echo "$line"
-                # apply_label "diff: review"
-                break
             else
                 echo "Note: trivial change detected, skipping:"
                 echo "$line"
@@ -118,6 +116,9 @@ function diff_one() {
         if [[ ! -f non_trivial ]]; then
             echo "Note: minimal changes, marking diff OK"
             # apply_label "diff: OK"
+        else
+            echo "WARNING: non-trivial changes detected, manual review required"
+            # apply_label "diff: review"
         fi
     fi
 
