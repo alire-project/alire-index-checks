@@ -116,3 +116,13 @@ function unset_alr_settings_key() {
         alr settings --global --unset $KEY
     fi
 }
+
+function detect_gnat_override() {
+    local tree=$(alr show --tree)
+
+    # If gnat_native is in the tree and gprbuild is not, force gprbuild:
+    if [[ $tree == *"gnat_native"* && $tree != *"gprbuild"* ]]; then
+        echo "Detected gnat_native in solution, forcing gprbuild"
+        alr toolchain --select gnat_native gprbuild
+    fi
+}

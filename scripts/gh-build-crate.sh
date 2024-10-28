@@ -311,6 +311,7 @@ for file in $CHANGES; do
       for toolchain_source in system indexed; do
 
          # If no system tools are available, we can skip the system toolchain.
+         # Detect the system gprbuild with which
          if [[ $toolchain_source == system ]]; then
             if ! gprbuild --version >/dev/null; then
                echo "No system toolchain found, skipping system toolchain"
@@ -326,6 +327,13 @@ for file in $CHANGES; do
                unset_alr_settings_key toolchain.use.gnat
                unset_alr_settings_key toolchain.use.gprbuild
                unset_alr_settings_key toolchain.external.gnat
+
+               # When a non-system gnat appears in the solution, we need to
+               # make sure a compatible gprbuild is used too. See
+               # https://github.com/alire-project/alire-index/pull/1273 for
+               # details. TODO: remove after 2.0.2
+               detect_gnat_override
+
                ;;
             indexed)
                alr toolchain --select gnat_native gprbuild
@@ -345,12 +353,10 @@ for file in $CHANGES; do
          echo AVAILABLE LOGS
          ls -l alire/alr_test_*.log
 
-         echo FULL LOG > full.log
-
          echo LOG CONTENTS
          ls alire/alr_test_*.log | while read file; do
             echo "---8<--- LOG FILE BEGIN: $file"
-            cat $file | tee -a full.log
+            cat $file
             echo "--->8--- LOG FILE END: $file"
          done
 
@@ -360,14 +366,8 @@ for file in $CHANGES; do
                if ! $failed; then
                   echo "Test succeeded with system toolchain, skipping indexed toolchain"
                   break
-               elif grep -q 'no compiler for language "Ada", cannot compile' full.log; then
-                  echo "No Ada compiler found, crate may require a cross-compiler"
-                  echo "Will try with an indexed toolchain next"
                else
-                  # Error with the system compiler for unknown causes that we
-                  # want to report
-                  echo "Test failed with system toolchain, please review logs"
-                  exit 1
+                  echo "Will try with an indexed toolchain next"
                fi
                ;;
             indexed)
