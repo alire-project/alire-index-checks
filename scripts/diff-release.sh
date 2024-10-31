@@ -43,7 +43,7 @@ alr index --del community >/dev/null || true
 diff_opts=(--minimal -U0 --ignore-all-space --ignore-blank-lines --ignore-cr-at-eol)
 
 is_trivial_change() {
-    [[ $1 =~ ^[+-](version|commit|url)[[:space:]]*= ]]
+    [[ $1 =~ ^[+-](version|commit|url|hashes)[[:space:]]*= ]]
 }
 
 function diff_one() {
