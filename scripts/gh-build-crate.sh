@@ -308,7 +308,12 @@ for file in $CHANGES; do
       # a toolchain provided by Alire. If either passes, we consider the crate
       # buildable. For x-build crates, the external toolchain is bound to fail.
 
-      for toolchain_source in system indexed; do
+      # Also, sometimes 2.0.1 fails to select gnat_native when a gnat below the
+      # latest one is requested. We make an explicit attempt with gnat_native
+      # for such cases. This should be corrected in 2.1 and the `native`
+      # attempt can then be removed.
+
+      for toolchain_source in system indexed native; do
 
          # If no system tools are available, we can skip the system toolchain.
          # Detect the system gprbuild with which
@@ -333,13 +338,25 @@ for file in $CHANGES; do
                # https://github.com/alire-project/alire-index/pull/1273 for
                # details. TODO: remove after 2.0.2
                detect_gnat_override
-
                ;;
+
             indexed)
                alr toolchain --select gnat_native gprbuild
                # Even if we need a x-compiler, this guarantees the proper
                # gprbuild will be used, and the x-compiler will be downloaded
                # on demand.
+               ;;
+
+            native)
+               alr --force with gnat_native 'gprbuild<2000'
+               alr --force update
+               # For crates not specifying a cross-compiler, this will ensure
+               # that a native compiler is used. The trouble in the `indexed`
+               # case is that when there's a explicit gnat= version, the
+               # default toolchain may still go unused.
+
+               echo Last resort solution:
+               alr with --tree
                ;;
          esac
 
@@ -372,6 +389,15 @@ for file in $CHANGES; do
                ;;
             indexed)
                echo "TEST RESULT with INDEXED toolchain: failed=$failed"
+               if ! $failed; then
+                  echo "Test succeeded with indexed toolchain, skipping native toolchain"
+                  break
+               else
+                  echo "Will try with a native dependency next"
+               fi
+               ;;
+            native)
+               echo "TEST RESULT with NATIVE toolchain: failed=$failed"
                if $failed; then
                   echo "No more toolchain combos left to try, failing"
                   exit 1
