@@ -365,17 +365,23 @@ for file in $CHANGES; do
          failed=false
          alr test || failed=true
 
-         # echo Building with $(alr exec -- gnat --version) ...
+         # For >2.1 versions there will be no logs, so check before outputting them
 
-         echo AVAILABLE LOGS
-         ls -l alire/alr_test_*.log
+         if ls alire | grep alr_test | grep log | wc -l | grep -q 0; then
+            echo "No test logs found, check previous stdout for test results"
+         else
+            echo AVAILABLE LOGS
+            ls -l alire/alr_test_*.log
 
-         echo LOG CONTENTS
-         ls alire/alr_test_*.log | while read file; do
-            echo "---8<--- LOG FILE BEGIN: $file"
-            cat $file
-            echo "--->8--- LOG FILE END: $file"
-         done
+            echo LOG CONTENTS
+            ls alire/alr_test_*.log | while read file; do
+               echo "---8<--- LOG FILE BEGIN: $file"
+               cat $file
+               echo "--->8--- LOG FILE END: $file"
+            done
+         fi
+
+         # Inform about the test result with the particular combo of toolchain
 
          case $toolchain_source in
             system)
