@@ -48,6 +48,7 @@ is_trivial_change() {
 
 function diff_one() {
     local file="$1"
+    local simple_file="$(basename $file)"
     local folder=$(dirname $file)
     local crate=$(basename $file .toml | cut -f1 -d-)
     local version=$(basename $file .toml | cut -f2- -d-)
@@ -56,6 +57,16 @@ function diff_one() {
     if [[ "$(echo $folder | cut -f1 -d/)" != "index" ]]; then
         echo SKIPPING non-manifest file: $file
         return
+    fi
+
+    # Skip also the index metadata file at index/index.toml
+    if [[ "$folder" == "index" ]]; then
+        if [[ "$simple_file" == "index.toml" ]]; then
+            echo SKIPPING index metadata file: $file
+            return
+        fi
+        echo UNEXPECTED file in index folder: $file
+        return 1
     fi
 
     echo " "

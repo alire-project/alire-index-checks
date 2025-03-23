@@ -109,7 +109,7 @@ alr index --check 2>&1 | grep "Warning:" && exit 1
 # Test crate
 for file in $CHANGES; do
 
-   if [[ $file == index.toml ]]; then
+   if [[ $file == index/index.toml ]]; then
       echo Skipping index metadata file: $file
       continue
    fi
