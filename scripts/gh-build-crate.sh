@@ -365,6 +365,23 @@ for file in $CHANGES; do
          failed=false
          alr test || failed=true
 
+         # If there is a forced compiler and gprbuild is too new, we
+         # cannot do anything about it (maybe we should not test on
+         # this platform anymore)
+
+         echo "Checking gprbuild ldd dependencies..."
+         alr exec -- gprbuild --version || true
+
+         if alr exec -- gprbuild --version 2>&1 | grep 'not found' | grep version | grep -q GLIBC; then
+            echo "gprbuild dependencies not found, crate requires a toolchain too new for the system"
+            echo "No point in trying other toolchains, exiting with dependencies:"
+            alr with --tree
+            echo "SKIPPING TEST BECAUSE OF gprbuild GLIBC DEPENDENCIES"
+            break
+         else
+            echo gprbuild ldd dependencies OK
+         fi
+
          # For >2.1 versions there will be no logs, so check before outputting them
 
          if ls alire | grep alr_test | grep log | wc -l | grep -q 0; then
