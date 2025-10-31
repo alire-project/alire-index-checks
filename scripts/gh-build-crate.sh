@@ -318,7 +318,8 @@ for file in $CHANGES; do
          # If no system tools are available, we can skip the system toolchain.
          # Detect the system gprbuild with which
          if [[ $toolchain_source == system ]]; then
-            if ! gprbuild --version >/dev/null; then
+            # Quietly identify whether gprbuild is available
+            if ! command -v gprbuild >/dev/null 2>&1; then
                echo "No system toolchain found, skipping system toolchain"
                continue
             fi
