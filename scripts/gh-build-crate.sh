@@ -17,6 +17,9 @@ shopt -s expand_aliases
 # Ensure all alr runs are non-interactive and able to output unexpected errors
 alias alr="alr -d -n --no-tty"
 
+# Alias sudo to not use it if already root (as in Docker without sudo installed)
+[ "$(id -u)" -eq 0 ] && alias sudo="" || alias sudo="sudo"
+
 # Configure `sh` to be Bourne-compatible or some `configure` scripts may fail
 [ `uname -s` == "Linux" ] && {
    sudo ln -fs $(type -p bash) /bin/sh
