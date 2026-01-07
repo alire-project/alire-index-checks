@@ -17,6 +17,11 @@ shopt -s expand_aliases
 # Ensure all alr runs are non-interactive and able to output unexpected errors
 alias alr="alr -d -n --no-tty"
 
+# Set a larger solver timeout as the default is very short and slow runners are
+# starting to hit it. We could force our way, but the whole point was to avoid
+# having a runner stuck for 6h because of a bad crate.
+alr settings --global --set solver.timeout 60
+
 # Alias sudo to not use it if already root (as in Docker without sudo installed)
 [ "$(id -u)" -eq 0 ] && alias sudo="" || alias sudo="sudo"
 
