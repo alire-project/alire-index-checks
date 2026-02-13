@@ -40,7 +40,7 @@ alr index --del community || true
 
 for file in $CHANGES; do
 
-   if [[ $file == index.toml ]]; then
+   if [[ $(basename $file) == index.toml ]]; then
       echo Skipping index metadata file: $file
       continue
    fi
@@ -75,7 +75,7 @@ for file in $CHANGES; do
    fi
 
    website=$(alr --format=json show $milestone | jq .website)
-   
+
    if [[ $website = '' ]] || [[ $website = '""' ]] || [[ $website = null ]]; then
       fail FAILED: crate manifest for $milestone has an empty website field
    fi
