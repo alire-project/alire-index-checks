@@ -74,7 +74,13 @@ for file in $CHANGES; do
       continue
    fi
 
-   website=$(alr --format=json show $milestone | jq .website)
+   # Avoid alr talk about autoupdating interfering
+   alr show $milestone > /dev/null
+
+   output=$(alr --format=json show $milestone 2>&1)
+   echo $output
+
+   website=$(echo $output | jq .website)
 
    if [[ $website = '' ]] || [[ $website = '""' ]] || [[ $website = null ]]; then
       fail FAILED: crate manifest for $milestone has an empty website field
