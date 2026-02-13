@@ -6,6 +6,7 @@ on:
 
 env:
   CHECKS_REPO: .
+  PACMAN: C:\Users\runneradmin\AppData\Local\alire\cache\msys64\usr\bin\pacman
 
 jobs:
 
@@ -30,18 +31,18 @@ jobs:
     # By default, this sets up the newest indexed native toolchain
     - name: Set up stable `alr`
       if: contains(github.base_ref, 'stable-')
-      uses: alire-project/setup-alire@v2
+      uses: alire-project/setup-alire@v5
 
     # By default, this sets up the newest indexed native toolchain
     - name: Set up devel `alr`
       if: contains(github.base_ref, 'devel-')
-      uses: alire-project/setup-alire@v2
+      uses: alire-project/setup-alire@v5
       with:
         branch: 'master'
 
     - name: Install tar from msys2 (Windows) # Git tar in Actions VM does not seem to work)
       if: matrix.os == 'windows-latest'
-      run: C:\Users\runneradmin\.cache\alire\msys64\usr\bin\pacman --noconfirm -S tar
+      run: ${{env.PACMAN}} --noconfirm -S tar
 
     # Test all crates found in the index, as we want to verify checks for all kinds of
     # crates still work when checks are modified.
