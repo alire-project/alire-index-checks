@@ -84,6 +84,8 @@ for file in $CHANGES; do
 
    if [[ $website = '' ]] || [[ $website = '""' ]] || [[ $website = null ]]; then
       fail FAILED: crate manifest for $milestone has an empty website field
+   else
+      echo PASSED: website for $milestone: $website
    fi
 
 done
