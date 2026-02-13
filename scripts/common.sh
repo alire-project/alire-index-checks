@@ -67,6 +67,12 @@ function apply_label() {
 
     echo "Applying label $LABEL to PR $PR_NUMBER"
 
+    # If GITHUB_TOKEN is not set, just print instead of applying the label
+    if [[ -z "${GITHUB_TOKEN:-}" ]]; then
+        echo "GITHUB_TOKEN not set, not applying label $LABEL to PR $PR_NUMBER"
+        return
+    fi
+
     # This is more painful that using gh, but gh may not be available in Docker
     # images
 
