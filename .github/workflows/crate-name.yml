@@ -1,0 +1,23 @@
+name: Crate name
+# Reject new crates with discouraged name patterns
+
+on:
+  pull_request:
+
+env:
+  CHECKS_REPO: .
+
+jobs:
+
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out
+      uses: actions/checkout@v2
+      with:
+        fetch-depth: 0
+
+    - name: Check crate name
+      run: ${{env.CHECKS_REPO}}/scripts/check-crate-name.sh
+      shell: bash
