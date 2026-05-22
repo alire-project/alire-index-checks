@@ -28,7 +28,7 @@ echo PR author: $PR_AUTHOR
 CHANGES=$( changed_manifests )
 
 # Bulk changes for the record
-echo Changed files: $CHANGES
+echo Changed manifests: $CHANGES
 
 # Enable Homebrew on macOS
 [ `uname -s` == "Darwin" ] && {
@@ -44,21 +44,6 @@ alr index --del community || true
 
 # Match maintainers against PR author
 for file in $CHANGES; do
-
-   if [[ $file == index.toml ]]; then
-      echo Skipping index metadata file: $file
-      continue
-   fi
-
-   if [[ $file != *.toml ]]; then
-      echo Skipping non-crate file: $file
-      continue
-   fi
-
-   if ! [ -f ./$file ]; then
-      echo Skipping deleted file: $file
-      continue
-   fi
 
    # Checks passed, this is a crate we must test
    is_system=false

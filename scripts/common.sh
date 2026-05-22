@@ -11,11 +11,28 @@ function box() {
 }
 
 function changed_manifests() {
+    local files
     if [[ "${ALL_CRATES:-unset}" != "unset" ]]; then
-        find index -name '*-*.toml'
+        files=$(find index -name '*-*.toml')
     else
-        git diff --name-only HEAD~1
+        files=$(git diff --name-only HEAD~1)
     fi
+
+    for file in $files; do
+        if [[ $file == index.toml ]]; then
+            echo >&2 "Skipping index metadata file: $file"
+            continue
+        fi
+        if [[ $file != *.toml ]]; then
+            echo >&2 "Skipping non-crate file: $file"
+            continue
+        fi
+        if ! [ -f ./$file ]; then
+            echo >&2 "Skipping deleted file: $file"
+            continue
+        fi
+        echo "$file"
+    done
 }
 
 function fail() {
