@@ -28,7 +28,7 @@ echo PR author: $PR_AUTHOR
 CHANGES=$( changed_manifests )
 
 # Bulk changes for the record
-echo Changed files: $CHANGES
+echo Changed manifests: $CHANGES
 
 # Enable Homebrew on macOS
 [ `uname -s` == "Darwin" ] && {

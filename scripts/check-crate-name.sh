@@ -15,7 +15,7 @@ popd
 CHANGES=$( changed_manifests )
 
 # Bulk changes for the record
-echo Changed files: $CHANGES
+echo Changed manifests: $CHANGES
 
 for file in $CHANGES; do
 
