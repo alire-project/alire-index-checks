@@ -14,6 +14,32 @@ popd
 # Required for aliases to work in non-interactive scripts
 shopt -s expand_aliases
 
+# Returns 0 (bypass allowed) if the modification of an existing manifest is
+# permitted: crate must be "libhello", and every changed line must be a TOML
+# comment (starts with #). This is because we use libhello as a trigger for
+# crate modification tests (clunky but...)
+function is_allowed_existing_modification() {
+   local file=$1
+   local crate=$2
+   local author=$3
+
+   [[ $crate = "libhello" ]] || return 1
+
+   local non_comment_changes
+   # Diff the file against base, keep only added/removed lines (+/-),
+   # drop the diff file-header lines (+++/---), strip the +/- sigil,
+   # then retain only lines that are NOT TOML comments (don't start with #).
+   # || true prevents set -e from aborting when grep finds no matches.
+   non_comment_changes=$(
+      git diff HEAD~1 -- "$file" \
+      | grep '^[+-]' \
+      | grep -v '^+++\|^---' \
+      | sed 's/^[+-]//' \
+      | grep -v '^#' \
+      || true)
+   [[ -z "$non_comment_changes" ]]
+}
+
 # Ensure all alr runs are non-interactive and able to output unexpected errors
 alias alr="alr -d -n"
 
@@ -72,7 +98,11 @@ for file in $CHANGES; do
    # than when adding a new crate, all previous ones aren't modified to change
    # maintainers there.
    if exists_in_base $file; then
-      fail "FAILED: modified $file already existed; ensure manually no maintainers were modified"
+      if is_allowed_existing_modification "$file" "$crate" "$PR_AUTHOR"; then
+         echo "BYPASSING: allowing modification of $file by $PR_AUTHOR (only comments changed)"
+      else
+         fail "FAILED: modified $file already existed; ensure manually no maintainers were modified"
+      fi
    fi
 
    # If there is no previous version, there's no test to perform
