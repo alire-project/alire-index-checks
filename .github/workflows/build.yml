@@ -31,12 +31,12 @@ jobs:
     # By default, this sets up the newest indexed native toolchain
     - name: Set up stable `alr`
       if: contains(github.base_ref, 'stable-')
-      uses: alire-project/setup-alire@v5
+      uses: alire-project/setup-alire@latest
 
     # By default, this sets up the newest indexed native toolchain
     - name: Set up devel `alr`
       if: contains(github.base_ref, 'devel-')
-      uses: alire-project/setup-alire@v5
+      uses: alire-project/setup-alire@latest
       with:
         branch: 'master'
 
