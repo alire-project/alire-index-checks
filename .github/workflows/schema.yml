@@ -7,8 +7,8 @@ on:
 
 env:
   CHECKS_REPO: .
-  # Manifest JSON Schema, fetched from the main Alire repository.
-  SCHEMA_URL: https://raw.githubusercontent.com/alire-project/alire/master/schemas/manifest-schema.yaml
+  # Alire repository providing the manifest JSON Schema.
+  ALIRE_REPO: https://github.com/alire-project/alire
 
 jobs:
 
@@ -29,9 +29,11 @@ jobs:
       shell: bash
 
     - name: Fetch manifest schema
-      run: curl -fsSL "$SCHEMA_URL" -o manifest-schema.yaml
+      run: git clone --depth 1 "$ALIRE_REPO" alire
       shell: bash
 
     - name: Check manifests against schema
-      run: ${{env.CHECKS_REPO}}/scripts/check-schema.py index manifest-schema.yaml
+      run: >-
+        ${{env.CHECKS_REPO}}/scripts/check-schema.py
+        index alire/schemas/manifest-schema.yaml
       shell: bash
