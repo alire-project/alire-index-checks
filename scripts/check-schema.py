@@ -15,23 +15,24 @@ Exit status:
     1  at least one manifest fails validation
     2  usage error, or the schema itself is invalid
 
-Dependencies: jsonschema, PyYAML (plus tomllib from the standard library).
+Dependencies: jsonschema, PyYAML, tomllib (in requirements.txt)
 """
 
 import os
 import sys
 import tomllib
+from typing import Any, NoReturn
 
 import yaml
 from jsonschema import Draft202012Validator
 
 
-def die(message, code=2):
+def die(message: str, code: int = 2) -> NoReturn:
     print(f"ERROR: {message}", file=sys.stderr)
     sys.exit(code)
 
 
-def load_schema(path):
+def load_schema(path: str) -> Draft202012Validator:
     """Load and self-check a JSON/YAML schema, returning a validator."""
     try:
         with open(path, encoding="utf-8") as f:
@@ -45,7 +46,7 @@ def load_schema(path):
     return Draft202012Validator(schema)
 
 
-def find_manifests(path):
+def find_manifests(path: str) -> list[str]:
     """Return the sorted manifests under `path` (a file or a directory)."""
     if os.path.isfile(path):
         return [path]
@@ -57,12 +58,13 @@ def find_manifests(path):
     return sorted(manifests)
 
 
-def load_toml(path):
+def load_toml(path: str) -> dict[str, Any]:
+    # tomllib requires a binary file object; it decodes UTF-8 itself
     with open(path, "rb") as f:
         return tomllib.load(f)
 
 
-def main(argv):
+def main(argv: list[str]) -> int:
     if len(argv) != 2:
         die(f"usage: {os.path.basename(sys.argv[0])} <path> <schema-file>")
     path, schema_file = argv
