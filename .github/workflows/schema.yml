@@ -3,7 +3,6 @@ name: Schema
 
 on:
   pull_request:
-  push:
 
 env:
   CHECKS_REPO: .
