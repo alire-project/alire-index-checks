@@ -11,7 +11,7 @@ env:
 
 jobs:
 
-  check:
+  check-all:
     runs-on: ubuntu-latest
 
     steps:
@@ -35,4 +35,32 @@ jobs:
       run: >-
         ${{env.CHECKS_REPO}}/scripts/check-schema.py
         index alire/schemas/manifest-schema.yaml
+      shell: bash
+
+  # Narrower check: validate only the manifests changed by the PR, with
+  # per-crate reporting via the shared check-schema.sh wrapper.
+  check-changed:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install dependencies
+      run: pip install -r ${{env.CHECKS_REPO}}/requirements.txt
+      shell: bash
+
+    - name: Fetch manifest schema
+      run: git clone --depth 1 "$ALIRE_REPO" alire
+      shell: bash
+
+    - name: Check changed manifests against schema
+      run: ${{env.CHECKS_REPO}}/scripts/check-schema.sh
       shell: bash
