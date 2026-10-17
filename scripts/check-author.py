@@ -19,11 +19,10 @@ subject to this check. Which kinds of changes are acceptable at all is decided
 by check-changes.py.
 
 Environment:
-    ALL_CRATES  when set, there is nothing to check and the check passes
-    DRY_RUN     when set, problems are reported but the check passes
+    ALL_CRATES, DRY_RUN: see "Mirror workflows" in README.md
 
 Exit status:
-    0  the author may change every touched crate (or ALL_CRATES/DRY_RUN set)
+    0  the author may change every touched crate (or DRY_RUN set)
     1  some crate cannot be changed by the author
     2  usage error
 
@@ -147,11 +146,6 @@ def main() -> int:
         print("Usage: check-author.py <PR author GitHub login>",
               file=sys.stderr)
         return 2
-
-    if "ALL_CRATES" in os.environ:
-        print("ALL_CRATES set: nothing to check, "
-              "as this check is about PR changes")
-        return 0
 
     author = sys.argv[1]
     print(f"PR author: {author}")

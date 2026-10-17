@@ -21,11 +21,10 @@ index/index.toml, ...) requires manual review and makes the check fail,
 listing every problem.
 
 Environment:
-    ALL_CRATES  when set, there is nothing to classify and the check passes
-    DRY_RUN     when set, problems are reported but the check passes
+    ALL_CRATES, DRY_RUN: see "Mirror workflows" in README.md
 
 Exit status:
-    0  only accepted changes (or ALL_CRATES/DRY_RUN set)
+    0  only accepted changes (or DRY_RUN set)
     1  some change requires manual review
 
 Dependencies: tomllib (Python >= 3.11)
@@ -121,11 +120,6 @@ def check() -> list[str]:
 
 
 def main() -> int:
-    if "ALL_CRATES" in os.environ:
-        print("ALL_CRATES set: nothing to classify, "
-              "as this check is about PR changes")
-        return 0
-
     return report(
         check(),
         success="PR only adds or withdraws releases",

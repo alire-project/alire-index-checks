@@ -1,4 +1,5 @@
-name: Toolchain
+name: "Mirror: Build Crate (Alire toolchain)"
+# Mirror of alire-index/.github/workflows/build-native.yml (see "Mirror workflows" in README.md)
 # Build the submitted crate with a native toolchain from Alire
 
 on:

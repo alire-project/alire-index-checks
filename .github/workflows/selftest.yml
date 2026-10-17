@@ -1,5 +1,6 @@
 name: Self-test
-# Runs the offline tests of the scripts (these are not index checks)
+# Runs the offline tests of the scripts. Not index checks nor mirrors (see
+# "Mirror workflows" in README.md)
 
 on:
   pull_request:

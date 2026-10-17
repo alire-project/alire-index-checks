@@ -1,4 +1,5 @@
-name: Schema
+name: "Mirror: Check Schema"
+# Mirror of alire-index/.github/workflows/check-schema.yml (see "Mirror workflows" in README.md)
 # Validate every manifest in the index against the Alire manifest JSON Schema
 
 on:

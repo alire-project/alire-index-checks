@@ -1,5 +1,6 @@
 name: Website
-# Check manifest has a website field
+# Check manifest has a website field. Not a mirror: alire-index does not run
+# it yet (see "Mirror workflows" in README.md)
 
 on:
   pull_request:

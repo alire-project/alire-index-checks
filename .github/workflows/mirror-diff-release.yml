@@ -1,9 +1,8 @@
-# Please read the TESTING file before modifying this file
-
+# Mirror of alire-index/.github/workflows/diff-release.yml (see "Mirror workflows" in README.md)
 # Show differences between the submitted manifest and the previous
 # release of the same crate, to enable easier catching of problems
 
-name: Diff release
+name: "Mirror: Diff release"
 
 on:
   pull_request:

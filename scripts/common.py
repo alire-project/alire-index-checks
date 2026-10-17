@@ -29,7 +29,16 @@ def git(*args: str) -> bytes:
 
 def changed_files() -> list[tuple[str, str]]:
     """Return (status, path) pairs changed by the PR. Renames are reported
-    as a deletion plus an addition."""
+    as a deletion plus an addition.
+
+    With ALL_CRATES set, every manifest in the index is reported as added
+    instead (see "Mirror workflows" in README.md)."""
+    if "ALL_CRATES" in os.environ:
+        paths = git("ls-tree", "-r", "-z", "--name-only", HEAD, "--",
+                    "index/").decode().split("\0")
+        return [("A", path) for path in sorted(paths)
+                if path.endswith(".toml") and "-" in os.path.basename(path)]
+
     fields = git("diff", "--name-status", "--no-renames", "-z",
                  BASE, HEAD).decode().split("\0")
     fields = [f for f in fields if f]
@@ -46,8 +55,8 @@ def load(rev: str, path: str) -> dict[str, Any]:
 
 
 def report(problems: list[str], success: str, failure: str) -> int:
-    """Print the outcome of a check and return its exit status. With DRY_RUN
-    set, problems are reported but the check passes."""
+    """Print the outcome of a check and return its exit status, honouring
+    DRY_RUN (see "Mirror workflows" in README.md)."""
     if not problems:
         print(f"SUCCESS: {success}")
         return 0
