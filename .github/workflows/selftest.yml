@@ -1,0 +1,41 @@
+name: Self-test
+# Runs the offline tests of the scripts (these are not index checks)
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+
+  check-author:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install dependencies
+      run: pip install -r requirements.txt
+      shell: bash
+
+    - name: Test author authority
+      run: tests/test-check-author.sh
+      shell: bash
+
+  check-changes:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out
+      uses: actions/checkout@v4
+
+    - name: Test change classification
+      run: tests/test-check-changes.sh
+      shell: bash
