@@ -32,18 +32,10 @@ Dependencies: tomllib (Python >= 3.11)
 """
 
 import os
-import re
-import subprocess
 import sys
-import tomllib
 from typing import Any
 
-BASE = "HEAD~1"
-HEAD = "HEAD"
-
-MANIFEST_RE = re.compile(
-    r"^index/(?P<shelf>[a-z0-9_]{2})/(?P<crate>[a-z0-9_]+)/"
-    r"(?P<file_crate>[a-z0-9_]+)-(?P<version>[0-9A-Za-z.+-]+)\.toml$")
+from common import BASE, HEAD, MANIFEST_RE, changed_files, git, load, report
 
 # Crate whose manifests may receive formatting-only changes to test index CI
 TEST_CRATE = "libhello"
@@ -51,32 +43,9 @@ TEST_CRATE = "libhello"
 SYMLINK_MODE = "120000"
 
 
-def git(*args: str) -> bytes:
-    return subprocess.run(["git", *args], check=True,
-                          capture_output=True).stdout
-
-
-def changed_files() -> list[tuple[str, str]]:
-    """Return (status, path) pairs changed by the PR. Renames are reported
-    as a deletion plus an addition."""
-    fields = git("diff", "--name-status", "--no-renames", "-z",
-                 BASE, HEAD).decode().split("\0")
-    fields = [f for f in fields if f]
-    return list(zip(fields[0::2], fields[1::2]))
-
-
 def is_symlink(path: str) -> bool:
     entry = git("ls-tree", HEAD, "--", path).decode()
     return entry.split(" ", 1)[0] == SYMLINK_MODE
-
-
-def load(rev: str, path: str) -> dict[str, Any]:
-    """Parse the manifest at `path` in revision `rev`. Raises ValueError on
-    invalid TOML."""
-    try:
-        return tomllib.loads(git("show", f"{rev}:{path}").decode())
-    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
-        raise ValueError(f"invalid TOML in {rev}:{path}: {e}") from e
 
 
 def without_available(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -157,23 +126,10 @@ def main() -> int:
               "as this check is about PR changes")
         return 0
 
-    problems = check()
-
-    if not problems:
-        print("SUCCESS: PR only adds or withdraws releases")
-        return 0
-
-    print()
-    print("Changes requiring manual review:")
-    for problem in problems:
-        print(f"   - {problem}")
-    print("FAILED: PR contains changes other than new releases "
-          "or withdrawals")
-
-    if "DRY_RUN" in os.environ:
-        print("DRY_RUN set, continuing")
-        return 0
-    return 1
+    return report(
+        check(),
+        success="PR only adds or withdraws releases",
+        failure="PR contains changes other than new releases or withdrawals")
 
 
 if __name__ == "__main__":
