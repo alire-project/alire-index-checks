@@ -163,4 +163,20 @@ manifest hello 1.1.0 > "index/he/hello/hello-1.1.0 x.toml"
 pr_commit
 expect fail "file name with a space"
 
+# --- ALL_CRATES: every manifest in the index is checked
+
+new_repo
+pr_commit
+ALL_CRATES=1 expect pass "ALL_CRATES on a valid index"
+
+new_repo
+mkdir -p index/xx/hello
+manifest hello 0.9.0 > index/xx/hello/hello-0.9.0.toml
+git add -A
+git commit -q -m "misplaced manifest already in base"
+pr_commit
+expect pass "misplaced manifest in base is not a PR change"
+ALL_CRATES=1 expect fail "ALL_CRATES detects misplaced manifest in base"
+ALL_CRATES=1 DRY_RUN=1 expect pass "ALL_CRATES with DRY_RUN reports but passes"
+
 finish

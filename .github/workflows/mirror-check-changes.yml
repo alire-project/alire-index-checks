@@ -1,0 +1,28 @@
+name: "Mirror: Check Files"
+# Mirror of alire-index/.github/workflows/check-changes.yml (see "Mirror workflows" in README.md)
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CHECKS_REPO: .
+
+jobs:
+
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Check files
+      run: '"$CHECKS_REPO/scripts/check-changes.py"'
+      shell: bash
+      env:
+        ALL_CRATES: TRUE

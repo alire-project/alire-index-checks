@@ -1,5 +1,6 @@
 name: Self-test
-# Runs the offline tests of the scripts (these are not index checks)
+# Runs the offline tests of the scripts. Not index checks nor mirrors (see
+# "Mirror workflows" in README.md)
 
 on:
   pull_request:
@@ -27,6 +28,17 @@ jobs:
 
     - name: Test author authority
       run: tests/test-check-author.sh
+      shell: bash
+
+  check-crate-name:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out
+      uses: actions/checkout@v4
+
+    - name: Test crate name check
+      run: tests/test-check-crate-name.sh
       shell: bash
 
   check-changes:

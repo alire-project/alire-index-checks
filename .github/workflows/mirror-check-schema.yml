@@ -1,4 +1,5 @@
-name: Schema
+name: "Mirror: Check Schema"
+# Mirror of alire-index/.github/workflows/check-schema.yml (see "Mirror workflows" in README.md)
 # Validate every manifest in the index against the Alire manifest JSON Schema
 
 on:
@@ -64,3 +65,5 @@ jobs:
     - name: Check changed manifests against schema
       run: ${{env.CHECKS_REPO}}/scripts/check-schema.sh
       shell: bash
+      env:
+        ALL_CRATES: TRUE

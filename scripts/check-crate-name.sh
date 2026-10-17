@@ -17,28 +17,36 @@ CHANGES=$( changed_manifests )
 # Bulk changes for the record
 echo Changed manifests: $CHANGES
 
-for file in $CHANGES; do
+declare -A checked=()
 
-   # Skip files that already existed (modifications of existing manifests)
-   if exists_in_base $file; then
-      echo Skipping modified existing manifest: $file
-      continue
-   fi
+for file in $CHANGES; do
 
    crate=$(basename $file .toml | cut -f1 -d-)
    crate_dir=$(dirname $file)
 
+   # With ALL_CRATES, every crate is checked as if new, once
+   if [[ "${ALL_CRATES:-unset}" != "unset" ]]; then
+      [[ -n "${checked[$crate]:-}" ]] && continue
+      checked[$crate]=1
+   else
+      # Skip files that already existed (modifications of existing manifests)
+      if exists_in_base $file; then
+         echo Skipping modified existing manifest: $file
+         continue
+      fi
+
+      # Skip if this crate directory already existed in the base commit
+      # (i.e. this is a new version of an existing crate)
+      if git ls-tree -r HEAD~1 --name-only "$crate_dir/" \
+            | grep -q '\.toml$'; then
+         echo Skipping new version of existing crate: $crate
+         continue
+      fi
+   fi
+
    echo
    box "$crate"
    echo
-
-   # Skip if this crate directory already existed in the base commit
-   # (i.e. this is a new version of an existing crate)
-   if git ls-tree -r HEAD~1 --name-only "$crate_dir/" \
-         | grep -q '\.toml$'; then
-      echo Skipping new version of existing crate: $crate
-      continue
-   fi
 
    # This is a new crate — check its name
    crate_lower=$(echo "$crate" | tr '[:upper:]' '[:lower:]')

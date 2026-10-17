@@ -11,6 +11,8 @@ function box() {
 }
 
 function changed_manifests() {
+    # With ALL_CRATES set, every manifest in the index is listed (see "Mirror
+    # workflows" in README.md)
     local files
     if [[ "${ALL_CRATES:-unset}" != "unset" ]]; then
         files=$(find index -name '*-*.toml')

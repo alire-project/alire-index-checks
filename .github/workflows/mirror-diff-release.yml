@@ -1,14 +1,12 @@
-# Please read the TESTING file before modifying this file
-
+# Mirror of alire-index/.github/workflows/diff-release.yml (see "Mirror workflows" in README.md)
 # Show differences between the submitted manifest and the previous
 # release of the same crate, to enable easier catching of problems
 
-name: Diff release
+name: "Mirror: Diff release"
 
+# No paths filter, unlike in alire-index: mirrors must run on script changes
 on:
   pull_request:
-    paths:
-      - 'index/**.toml'
 
 env:
   CHECKS_REPO: .
@@ -39,7 +37,8 @@ jobs:
         branch: master
 
     - name: DIFF releases
-      run: ${{env.CHECKS_REPO}}/scripts/diff-release.sh || true # No deal breaker if failed
+      # No `|| true`, unlike in alire-index, so that a broken script is noticed
+      run: ${{env.CHECKS_REPO}}/scripts/diff-release.sh
       shell: bash
       env:
         ALL_CRATES: TRUE

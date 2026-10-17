@@ -7,6 +7,8 @@
 #
 # Test scripts must set SCRIPT (and optionally SCRIPT_ARGS), define a
 # base_files function that populates the base commit, and end with `finish`.
+# A run counts as a failure only if it prints a line matching FAIL_PATTERN
+# (by default the "FAILED:" of the Python checks), otherwise as a crash.
 
 set -o errexit
 set -o nounset
@@ -14,6 +16,7 @@ set -o nounset
 # shellcheck disable=SC2034 # Used by the sourcing test scripts
 SCRIPTS_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )/../scripts" &> /dev/null && pwd )
 SCRIPT_ARGS=()
+FAIL_PATTERN="^FAILED:"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
@@ -72,7 +75,7 @@ function expect() {
     local actual
     if "$SCRIPT" "${SCRIPT_ARGS[@]}" > "$WORK/out" 2>&1; then
         actual=pass
-    elif grep -q "^FAILED:" "$WORK/out"; then
+    elif grep -q "$FAIL_PATTERN" "$WORK/out"; then
         actual=fail
     else
         actual=crash # Failed without the expected diagnostic

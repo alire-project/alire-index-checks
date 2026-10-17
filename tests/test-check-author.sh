@@ -206,6 +206,30 @@ pr_commit
 as kate
 expect fail "non-semver version in base, fails closed"
 
+# --- ALL_CRATES: every crate in the index is checked
+
+new_repo
+pr_commit
+as bob
+expect pass "no changes, no crates checked"
+ALL_CRATES=1 expect fail "ALL_CRATES: author does not maintain every crate"
+ALL_CRATES=1 DRY_RUN=1 expect pass "ALL_CRATES with DRY_RUN reports but passes"
+
+function base_files() {
+    # Index fully maintained by bob, including an external-only crate
+    mkdir -p index/he/hello index/cu/curl
+    manifest hello 1.0.0 '"alice"' > index/he/hello/hello-1.0.0.toml
+    manifest hello 2.0.0 '"bob"' > index/he/hello/hello-2.0.0.toml
+    external curl '"bob"' > index/cu/curl/curl-external.toml
+}
+
+new_repo
+pr_commit
+as bob
+ALL_CRATES=1 expect pass "ALL_CRATES: author maintains every crate"
+as alice
+ALL_CRATES=1 expect fail "ALL_CRATES: maintainer of an older release only"
+
 new_repo
 pr_commit
 # shellcheck disable=SC2034 # Used by lib.sh
