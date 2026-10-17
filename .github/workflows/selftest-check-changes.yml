@@ -1,4 +1,4 @@
-name: Self-test check-changes script
+name: Self-test
 # Runs the offline tests of scripts/check-changes.py (not an index check)
 
 on:
@@ -9,7 +9,7 @@ permissions:
 
 jobs:
 
-  test:
+  check-changes:
     runs-on: ubuntu-latest
 
     steps:
