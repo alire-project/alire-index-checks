@@ -22,3 +22,6 @@ jobs:
     - name: Check crate name
       run: ${{env.CHECKS_REPO}}/scripts/check-crate-name.sh
       shell: bash
+      env:
+        ALL_CRATES: TRUE
+        DRY_RUN: TRUE # Sample crates like libhello have names flagged for review

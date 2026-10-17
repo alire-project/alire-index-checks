@@ -65,3 +65,5 @@ jobs:
     - name: Check changed manifests against schema
       run: ${{env.CHECKS_REPO}}/scripts/check-schema.sh
       shell: bash
+      env:
+        ALL_CRATES: TRUE

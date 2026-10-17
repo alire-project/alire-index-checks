@@ -63,7 +63,19 @@ environment variables:
   `report()` in `common.py`, and in shell scripts by `fail` in `common.sh`.
 
 Mirrors must not set `DRY_RUN` when the sample index is expected to pass, so
-that a broken script is noticed.
+that a broken script is noticed. For the same reason, mirrors differ from their
+siblings in two ways:
+
+- They have no `paths:` filter, as they must run on PRs that change only
+  scripts.
+- They do not ignore the script exit status (`|| true`).
+
+Scripts must honour both variables on every path:
+
+- With `ALL_CRATES`, nothing may be skipped as "not changed by the PR". For
+  example, the crate name check treats every crate as new.
+- With `DRY_RUN`, every failure must go through `fail`/`report()`, not
+  `exit 1`.
 
 ### Adding a check
 
