@@ -11,6 +11,7 @@ env:
 jobs:
 
   check:
+    name: "Website" # Unique, as a required check name
     runs-on: ubuntu-latest
 
     steps:

@@ -11,6 +11,7 @@ permissions:
 jobs:
 
   check-author:
+    name: "Self-test: check-author" # Unique, as a required check name
     runs-on: ubuntu-latest
 
     steps:
@@ -31,6 +32,7 @@ jobs:
       shell: bash
 
   check-crate-name:
+    name: "Self-test: check-crate-name" # Unique, as a required check name
     runs-on: ubuntu-latest
 
     steps:
@@ -42,6 +44,7 @@ jobs:
       shell: bash
 
   check-changes:
+    name: "Self-test: check-changes" # Unique, as a required check name
     runs-on: ubuntu-latest
 
     steps:

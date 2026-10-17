@@ -13,6 +13,7 @@ env:
 jobs:
 
   check-all:
+    name: "Mirror: Schema (whole index)" # Unique, as a required check name
     runs-on: ubuntu-latest
 
     steps:
@@ -41,6 +42,7 @@ jobs:
   # Narrower check: validate only the manifests changed by the PR, with
   # per-crate reporting via the shared check-schema.sh wrapper.
   check-changed:
+    name: "Mirror: Schema" # Unique, as a required check name
     runs-on: ubuntu-latest
 
     steps:

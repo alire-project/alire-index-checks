@@ -12,7 +12,7 @@ env:
 jobs:
 
   build:
-    name: ${{ matrix.os }}
+    name: "Mirror: native / ${{ matrix.os }}" # Unique, as a required check name
 
     runs-on: ${{ matrix.os }}
 
