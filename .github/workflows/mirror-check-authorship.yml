@@ -13,6 +13,7 @@ env:
 jobs:
 
   check:
+    name: "Mirror: Author" # Unique, as a required check name
     runs-on: ubuntu-latest
 
     steps:
