@@ -1,6 +1,11 @@
 # Mirror of alire-index/.github/workflows/diff-release.yml (see "Mirror workflows" in README.md)
 # Show differences between the submitted manifest and the previous
 # release of the same crate, to enable easier catching of problems
+#
+# In alire-index this check is informational and never fails (`|| true`), so a
+# broken diff-release.sh would go unnoticed there: the diff would simply
+# vanish. This mirror runs the script without `|| true`, so that a broken
+# script fails here, before it reaches alire-index.
 
 name: "Mirror: Diff release"
 
