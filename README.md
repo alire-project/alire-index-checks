@@ -21,8 +21,10 @@ Mirrors are named after their sibling in alire-index:
 - workflow name: `Mirror: <alire-index workflow name>`
 - job name: `Mirror: <alire-index job name>`, e.g. `Mirror: Author` for
   `check / Author`. Job names are what branch protection matches as required
-  checks, so they must be unique. Renaming a job, or changing a build matrix,
-  requires updating the required checks in the branch protection settings.
+  checks, so they must be unique. Build matrix jobs are not required directly:
+  the build mirror's summary job `Mirror: native / all` stands for the whole
+  matrix, mirroring alire-index (see its `.github/WORKFLOWS.md`). Renaming a
+  required job still requires updating the branch protection settings.
 
 | alire-index workflow | Mirror |
 |---|---|
