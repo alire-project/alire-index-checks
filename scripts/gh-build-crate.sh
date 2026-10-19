@@ -75,6 +75,17 @@ echo Changed files: $CHANGES
    echo "Homebrew for macOS enabled"
 }
 
+# On macOS, use the SDK of the active (xcode-select) developer directory.
+# gnat_native defaults its sysroot to the Command Line Tools SDK but links with
+# the active developer directory's ld-classic. When the runner's CLT is newer
+# than the selected Xcode (e.g. CLT 27 with Xcode 26.6), that linker cannot
+# parse the newer SDK's libSystem.tbd and every libSystem symbol is undefined.
+# SDKROOT is honoured by gcc and the Apple tools alike.
+if [ `uname -s` == "Darwin" ] && [ -z "${SDKROOT:-}" ]; then
+   export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+   echo "SDKROOT set to $SDKROOT (developer dir: $(xcode-select -p))"
+fi
+
 # Disable assistant. This is necessary despite the setup-alire action doing it
 # too, because we sometimes run inside a Docker with fresh configuration
 alr toolchain --disable-assistant
