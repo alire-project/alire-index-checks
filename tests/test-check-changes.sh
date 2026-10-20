@@ -163,6 +163,49 @@ manifest hello 1.1.0 > "index/he/hello/hello-1.1.0 x.toml"
 pr_commit
 expect fail "file name with a space"
 
+# --- Length after X.Y.Z, separators included (32 characters, as in alr)
+
+function chars() { printf 'a%.0s' $(seq "$1"); }
+
+new_repo
+manifest hello "1.1.0-$(chars 31)" > "index/he/hello/hello-1.1.0-$(chars 31).toml"
+pr_commit
+expect pass "pre-release at the length limit"
+
+new_repo
+V="1.1.0-$(chars 10)+$(chars 20)"
+manifest hello "$V" > "index/he/hello/hello-$V.toml"
+pr_commit
+expect pass "pre-release and build metadata at the length limit"
+
+new_repo
+manifest hello "1.1.0-$(chars 32)" > "index/he/hello/hello-1.1.0-$(chars 32).toml"
+pr_commit
+expect fail "pre-release over the length limit"
+
+new_repo
+manifest hello "1.1.0+$(chars 32)" > "index/he/hello/hello-1.1.0+$(chars 32).toml"
+pr_commit
+expect fail "build metadata over the length limit"
+
+new_repo
+V="1.1.0-$(chars 10)+$(chars 21)"
+manifest hello "$V" > "index/he/hello/hello-$V.toml"
+pr_commit
+expect fail "pre-release and build metadata together over the length limit"
+
+new_repo
+# Older indexes let the build metadata differ between file name and contents
+manifest hello "1.1.0+$(chars 32)" > index/he/hello/hello-1.1.0+x.toml
+pr_commit
+expect fail "length over the limit only in contents"
+
+new_repo
+V="999999999999999999.999999999999999999.999999999999999999"
+manifest hello "$V" > "index/he/hello/hello-$V.toml"
+pr_commit
+expect pass "long X.Y.Z is not limited"
+
 # --- ALL_CRATES: every manifest in the index is checked
 
 new_repo
