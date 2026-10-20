@@ -8,7 +8,8 @@ Usage:
 Must run in an index checkout whose HEAD is the PR merge commit and HEAD~1
 the base commit, as in CI. Accepted changes are:
 
-- Added manifests at index/<shelf>/<crate>/<crate>-<version>.toml
+- Added manifests at index/<shelf>/<crate>/<crate>-<version>.toml, with at
+  most MAX_VERSION_SUFFIX_LENGTH characters after X.Y.Z in their version
 - Withdrawals: modified manifests that are identical to the base version
   once parsed, except for the top-level `available = false`
 - Formatting/comment-only modifications of libhello manifests, which are used
@@ -34,12 +35,18 @@ import os
 import sys
 from typing import Any
 
-from common import BASE, HEAD, MANIFEST_RE, changed_files, git, load, report
+from common import (BASE, EXTERNAL, HEAD, MANIFEST_RE, changed_files, git,
+                    load, report)
 
 # Crate whose manifests may receive formatting-only changes to test index CI
 TEST_CRATE = "libhello"
 
 SYMLINK_MODE = "120000"
+
+# Maximum length of everything after X.Y.Z in a version: pre-release and build
+# metadata, with their '-' and '+' separators. Same limit as alr's
+# Alire.Index.Max_Version_Suffix_Length.
+MAX_VERSION_SUFFIX_LENGTH = 32
 
 
 def is_symlink(path: str) -> bool:
@@ -72,6 +79,19 @@ def classify_modification(path: str, crate: str) -> str | None:
     return None
 
 
+def version_suffix_problems(version: str, where: str) -> list[str]:
+    """Return the problems with the length of what follows X.Y.Z in
+    `version`, found in `where`."""
+    # X.Y.Z has neither '-' nor '+', so the suffix starts at the first of them
+    starts = [i for i in (version.find("-"), version.find("+")) if i >= 0]
+    suffix = version[min(starts):] if starts else ""
+    if len(suffix) > MAX_VERSION_SUFFIX_LENGTH:
+        return [f"pre-release and build metadata of version {version} in "
+                f"{where} are longer than {MAX_VERSION_SUFFIX_LENGTH} "
+                f"characters in total"]
+    return []
+
+
 def check() -> list[str]:
     """Classify every change and return the problems found."""
     problems = []
@@ -102,7 +122,12 @@ def check() -> list[str]:
                 if is_symlink(path):
                     problems.append(f"added manifest is a symlink: {path}")
                 else:
-                    load(HEAD, path)
+                    manifest = load(HEAD, path)
+                    if match["version"] != EXTERNAL:
+                        problems += version_suffix_problems(
+                            match["version"], f"file name {path}")
+                        problems += version_suffix_problems(
+                            str(manifest.get("version", "")), path)
             elif status == "M":
                 accepted = classify_modification(path, crate)
                 if accepted:
