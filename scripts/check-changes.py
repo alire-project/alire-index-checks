@@ -8,8 +8,9 @@ Usage:
 Must run in an index checkout whose HEAD is the PR merge commit and HEAD~1
 the base commit, as in CI. Accepted changes are:
 
-- Added manifests at index/<shelf>/<crate>/<crate>-<version>.toml, with at
-  most MAX_VERSION_SUFFIX_LENGTH characters after X.Y.Z in their version
+- Added manifests at index/<shelf>/<crate>/<crate>-<version>.toml, of at
+  most MAX_MANIFEST_SIZE bytes and with at most MAX_VERSION_SUFFIX_LENGTH
+  characters after X.Y.Z in their version
 - Withdrawals: modified manifests that are identical to the base version
   once parsed, except for the top-level `available = false`
 - Formatting/comment-only modifications of libhello manifests, which are used
@@ -48,6 +49,12 @@ SYMLINK_MODE = "120000"
 # Alire.Index.Max_Version_Suffix_Length.
 MAX_VERSION_SUFFIX_LENGTH = 32
 
+# Maximum size in bytes of an added manifest, to keep the index lean (the
+# largest one is under 7 KiB). alr's own limit (setting
+# index.max_manifest_size) is more generous, so that this one can change
+# without breaking released alr versions.
+MAX_MANIFEST_SIZE = 16 * 1024
+
 
 def is_symlink(path: str) -> bool:
     entry = git("ls-tree", HEAD, "--", path).decode()
@@ -77,6 +84,15 @@ def classify_modification(path: str, crate: str) -> str | None:
         return f"formatting-only {TEST_CRATE} modification"
 
     return None
+
+
+def manifest_size_problems(path: str) -> list[str]:
+    """Return the problems with the size of the manifest at `path`."""
+    size = int(git("cat-file", "-s", f"{HEAD}:{path}"))
+    if size > MAX_MANIFEST_SIZE:
+        return [f"manifest {path} is larger than {MAX_MANIFEST_SIZE} bytes "
+                f"({size} bytes)"]
+    return []
 
 
 def version_suffix_problems(version: str, where: str) -> list[str]:
@@ -122,6 +138,7 @@ def check() -> list[str]:
                 if is_symlink(path):
                     problems.append(f"added manifest is a symlink: {path}")
                 else:
+                    problems += manifest_size_problems(path)
                     manifest = load(HEAD, path)
                     if match["version"] != EXTERNAL:
                         problems += version_suffix_problems(
