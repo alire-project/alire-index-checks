@@ -206,6 +206,40 @@ manifest hello "$V" > "index/he/hello/hello-$V.toml"
 pr_commit
 expect pass "long X.Y.Z is not limited"
 
+# --- Manifest size (16 KiB)
+
+function pad_to() { # Pad a manifest with a comment to the given size
+    local file=$1 size=$2
+    local len; len=$(stat -c %s "$file")
+    printf '#%s\n' "$(chars $((size - len - 2)))" >> "$file"
+}
+
+new_repo
+manifest hello 1.1.0 > index/he/hello/hello-1.1.0.toml
+pad_to index/he/hello/hello-1.1.0.toml 16384
+pr_commit
+expect pass "manifest at the size limit"
+
+new_repo
+manifest hello 1.1.0 > index/he/hello/hello-1.1.0.toml
+pad_to index/he/hello/hello-1.1.0.toml 16385
+pr_commit
+expect fail "manifest over the size limit"
+
+new_repo
+mkdir -p index/wo/world
+manifest world external > index/wo/world/world-external.toml
+pad_to index/wo/world/world-external.toml 16384
+pr_commit
+expect pass "external manifest at the size limit"
+
+new_repo
+mkdir -p index/wo/world
+manifest world external > index/wo/world/world-external.toml
+pad_to index/wo/world/world-external.toml 16385
+pr_commit
+expect fail "external manifest over the size limit"
+
 # --- ALL_CRATES: every manifest in the index is checked
 
 new_repo
