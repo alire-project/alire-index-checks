@@ -240,6 +240,51 @@ pad_to index/wo/world/world-external.toml 16385
 pr_commit
 expect fail "external manifest over the size limit"
 
+# --- Nesting depth (128 levels of tables and arrays)
+
+function nest() { # Top-level TOML of the given kind nested $2 levels deep
+    local kind=$1 depth=$2
+    local keys; keys=$(printf '.a%.0s' $(seq $((depth - 1))))
+    case $kind in
+        dotted) echo "x$keys = 1" ;;
+        header) printf '[x%s]\nk = 1\n' "${keys%.a}" ;;
+        array)  printf 'x = %s%s\n' "$(printf '[%.0s' $(seq "$depth"))" \
+                                     "$(printf ']%.0s' $(seq "$depth"))" ;;
+        inline) printf 'x = %s1%s\n' "$(printf '{a=%.0s' $(seq $((depth - 1))))" \
+                                      "$(printf '}%.0s' $(seq $((depth - 1))))" ;;
+    esac
+}
+
+function nested_manifest() { # New release of hello with top-level nesting
+    if [[ $1 == header ]]; then # Last, or it would capture the keys below it
+        { manifest hello 1.1.0; nest "$1" "$2"; }
+    else
+        { nest "$1" "$2"; manifest hello 1.1.0; }
+    fi > index/he/hello/hello-1.1.0.toml
+}
+
+for kind in dotted header array inline; do
+    new_repo
+    nested_manifest $kind 128
+    pr_commit
+    expect pass "$kind nesting at the depth limit"
+
+    new_repo
+    nested_manifest $kind 129
+    pr_commit
+    expect fail "$kind nesting over the depth limit"
+done
+
+new_repo
+nested_manifest array 2000 # tomllib raises RecursionError
+pr_commit
+expect fail "array nesting too deep for the parser"
+
+new_repo
+nested_manifest dotted 5000 # tomllib builds a deep table
+pr_commit
+expect fail "dotted key nesting far over the depth limit"
+
 # --- ALL_CRATES: every manifest in the index is checked
 
 new_repo

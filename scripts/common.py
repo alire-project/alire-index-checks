@@ -47,11 +47,13 @@ def changed_files() -> list[tuple[str, str]]:
 
 def load(rev: str, path: str) -> dict[str, Any]:
     """Parse the manifest at `path` in revision `rev`. Raises ValueError on
-    invalid TOML."""
+    invalid TOML, or TOML nested too deep for the (recursive) parser."""
     try:
         return tomllib.loads(git("show", f"{rev}:{path}").decode())
     except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
         raise ValueError(f"invalid TOML in {rev}:{path}: {e}") from e
+    except RecursionError as e:
+        raise ValueError(f"TOML nested too deep in {rev}:{path}") from e
 
 
 def report(problems: list[str], success: str, failure: str) -> int:

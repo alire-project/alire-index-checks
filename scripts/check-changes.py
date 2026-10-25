@@ -9,8 +9,9 @@ Must run in an index checkout whose HEAD is the PR merge commit and HEAD~1
 the base commit, as in CI. Accepted changes are:
 
 - Added manifests at index/<shelf>/<crate>/<crate>-<version>.toml, of at
-  most MAX_MANIFEST_SIZE bytes and with at most MAX_VERSION_SUFFIX_LENGTH
-  characters after X.Y.Z in their version
+  most MAX_MANIFEST_SIZE bytes, nested at most MAX_NESTING_DEPTH levels, and
+  with at most MAX_VERSION_SUFFIX_LENGTH characters after X.Y.Z in their
+  version
 - Withdrawals: modified manifests that are identical to the base version
   once parsed, except for the top-level `available = false`
 - Formatting/comment-only modifications of libhello manifests, which are used
@@ -55,6 +56,13 @@ MAX_VERSION_SUFFIX_LENGTH = 32
 # without breaking released alr versions.
 MAX_MANIFEST_SIZE = 16 * 1024
 
+# Maximum nesting of tables and arrays in an added manifest. alr's TOML
+# parser and the code walking the result are recursive, and exhaust the
+# stack at a few thousand levels (Python's tomllib, at a few hundred). Real
+# manifests have at most 4 levels plus 2 per nested case(...), 7 so far; the
+# limit leaves room for casing on many variables (e.g., environment ones).
+MAX_NESTING_DEPTH = 128
+
 
 def is_symlink(path: str) -> bool:
     entry = git("ls-tree", HEAD, "--", path).decode()
@@ -92,6 +100,30 @@ def manifest_size_problems(path: str) -> list[str]:
     if size > MAX_MANIFEST_SIZE:
         return [f"manifest {path} is larger than {MAX_MANIFEST_SIZE} bytes "
                 f"({size} bytes)"]
+    return []
+
+
+def nesting_depth(value: Any) -> int:
+    """Return the levels of tables and arrays in `value`, without recursion
+    (dotted keys build arbitrarily deep tables without upsetting tomllib)."""
+    deepest = 0
+    pending = [(value, 0)]
+    while pending:
+        item, depth = pending.pop()
+        deepest = max(deepest, depth)
+        if isinstance(item, dict):
+            pending += [(child, depth + 1) for child in item.values()]
+        elif isinstance(item, list):
+            pending += [(child, depth + 1) for child in item]
+    return deepest
+
+
+def nesting_problems(manifest: dict[str, Any], path: str) -> list[str]:
+    """Return the problems with the nesting depth of `manifest`."""
+    depth = nesting_depth(manifest)
+    if depth > MAX_NESTING_DEPTH:
+        return [f"manifest {path} is nested deeper than {MAX_NESTING_DEPTH} "
+                f"levels ({depth} levels)"]
     return []
 
 
@@ -140,6 +172,7 @@ def check() -> list[str]:
                 else:
                     problems += manifest_size_problems(path)
                     manifest = load(HEAD, path)
+                    problems += nesting_problems(manifest, path)
                     if match["version"] != EXTERNAL:
                         problems += version_suffix_problems(
                             match["version"], f"file name {path}")
