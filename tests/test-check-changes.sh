@@ -305,6 +305,48 @@ sed -i '3a available = false' index/he/hello/hello-1.0.0.toml
 pr_commit
 expect pass "withdrawal of an existing release with pins"
 
+# --- Origin URLs: http(s) and git only
+
+function with_origin() { # New release of hello with the given [origin] table
+    { manifest hello 1.1.0 | sed '/^\[origin\]/,$d'; printf '[origin]\n%s\n' "$1"; } \
+        > index/he/hello/hello-1.1.0.toml
+}
+
+for origin in 'url = "git+https://github.com/someone/hello.git"' \
+              'url = "https://github.com/someone/hello/archive/v1.1.0.tar.gz"' \
+              'url = "http://example.com/hello-1.1.0.tbz2"' \
+              'url = "git://example.com/hello.git"' \
+              'url = "hg+https://example.com/hello"'; do
+    new_repo
+    with_origin "$origin"
+    pr_commit
+    expect pass "origin $origin"
+done
+
+for origin in 'url = "file:../hello"' \
+              'url = "../hello"' \
+              'url = "git+file:/srv/hello"' \
+              'url = "git+ssh://git@github.com/someone/hello.git"' \
+              'url = "git@github.com:someone/hello.git"' \
+              'url = "svn+https://example.com/hello"'; do
+    new_repo
+    with_origin "$origin"
+    pr_commit
+    expect fail "origin $origin"
+done
+
+new_repo
+with_origin '"case(os)".linux.url = "https://example.com/hello-linux.tgz"
+"case(os)".windows.url = "file:C:/hello-windows.zip"'
+pr_commit
+expect fail "origin with a local URL in one case"
+
+new_repo
+{ manifest hello 1.1.0; printf '\n[[mirror]]\nurl = "git+ssh://git@example.com/hello.git"\n'; } \
+    > index/he/hello/hello-1.1.0.toml
+pr_commit
+expect pass "mirrors are not concerned"
+
 # --- ALL_CRATES: every manifest in the index is checked
 
 new_repo
