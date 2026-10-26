@@ -10,8 +10,8 @@ the base commit, as in CI. Accepted changes are:
 
 - Added manifests at index/<shelf>/<crate>/<crate>-<version>.toml, of at
   most MAX_MANIFEST_SIZE bytes, nested at most MAX_NESTING_DEPTH levels,
-  without pins, and with at most MAX_VERSION_SUFFIX_LENGTH characters after
-  X.Y.Z in their version
+  without pins, with http(s) or git origins (ORIGIN_URL_RE), and with at
+  most MAX_VERSION_SUFFIX_LENGTH characters after X.Y.Z in their version
 - Withdrawals: modified manifests that are identical to the base version
   once parsed, except for the top-level `available = false`
 - Formatting/comment-only modifications of libhello manifests, which are used
@@ -34,6 +34,7 @@ Dependencies: tomllib (Python >= 3.11)
 """
 
 import os
+import re
 import sys
 from typing import Any
 
@@ -137,6 +138,33 @@ def pins_problems(manifest: dict[str, Any], path: str) -> list[str]:
     return []
 
 
+# Origin URLs allowed in new manifests: http(s) and git, optionally with an
+# explicit VCS prefix. This leaves out local origins (meaningless in a shared
+# index), ssh ones (which need the user's keys, also git@host:path) and svn
+# ones (whose revisions, unlike commits and archive hashes, do not pin content).
+# Mirrors are not concerned: they must match the origin's commit or hashes.
+ORIGIN_URL_RE = re.compile(r"^((git|hg)\+)?(https?|git)://")
+
+
+def origin_urls(value: Any) -> list[str]:
+    """Return the URLs in an origin table, including those in every case of
+    case(...) expressions."""
+    if isinstance(value, dict):
+        return [url for key, child in value.items()
+                for url in ([child] if key == "url" and isinstance(child, str)
+                            else origin_urls(child))]
+    return []
+
+
+def origin_problems(manifest: dict[str, Any], path: str) -> list[str]:
+    """Return the problems with the origin URLs of `manifest`."""
+    return [f"origin URL {url} in {path} is not allowed in the community "
+            f"index: only http(s) and git URLs are (no local, ssh or svn "
+            f"origins)"
+            for url in origin_urls(manifest.get("origin", {}))
+            if not ORIGIN_URL_RE.match(url)]
+
+
 def version_suffix_problems(version: str, where: str) -> list[str]:
     """Return the problems with the length of what follows X.Y.Z in
     `version`, found in `where`."""
@@ -184,6 +212,7 @@ def check() -> list[str]:
                     manifest = load(HEAD, path)
                     problems += nesting_problems(manifest, path)
                     problems += pins_problems(manifest, path)
+                    problems += origin_problems(manifest, path)
                     if match["version"] != EXTERNAL:
                         problems += version_suffix_problems(
                             match["version"], f"file name {path}")
