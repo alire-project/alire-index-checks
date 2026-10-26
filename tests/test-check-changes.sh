@@ -285,6 +285,26 @@ nested_manifest dotted 5000 # tomllib builds a deep table
 pr_commit
 expect fail "dotted key nesting far over the depth limit"
 
+# --- Pins (not even an empty table)
+
+new_repo
+{ manifest hello 1.1.0; printf '\n[[pins]]\n'; } > index/he/hello/hello-1.1.0.toml
+pr_commit
+expect fail "new release with an empty pins table"
+
+new_repo
+{ manifest hello 1.1.0; printf '\n[[pins]]\nlibhello = { path = "../libhello" }\n'; } \
+    > index/he/hello/hello-1.1.0.toml
+pr_commit
+expect fail "new release with a pin"
+
+new_repo
+printf '\n[[pins]]\n' >> index/he/hello/hello-1.0.0.toml
+git commit -q -am "base release with an empty pins table"
+sed -i '3a available = false' index/he/hello/hello-1.0.0.toml
+pr_commit
+expect pass "withdrawal of an existing release with pins"
+
 # --- ALL_CRATES: every manifest in the index is checked
 
 new_repo

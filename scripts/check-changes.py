@@ -9,9 +9,9 @@ Must run in an index checkout whose HEAD is the PR merge commit and HEAD~1
 the base commit, as in CI. Accepted changes are:
 
 - Added manifests at index/<shelf>/<crate>/<crate>-<version>.toml, of at
-  most MAX_MANIFEST_SIZE bytes, nested at most MAX_NESTING_DEPTH levels, and
-  with at most MAX_VERSION_SUFFIX_LENGTH characters after X.Y.Z in their
-  version
+  most MAX_MANIFEST_SIZE bytes, nested at most MAX_NESTING_DEPTH levels,
+  without pins, and with at most MAX_VERSION_SUFFIX_LENGTH characters after
+  X.Y.Z in their version
 - Withdrawals: modified manifests that are identical to the base version
   once parsed, except for the top-level `available = false`
 - Formatting/comment-only modifications of libhello manifests, which are used
@@ -127,6 +127,16 @@ def nesting_problems(manifest: dict[str, Any], path: str) -> list[str]:
     return []
 
 
+def pins_problems(manifest: dict[str, Any], path: str) -> list[str]:
+    """Return the problems with pins in `manifest`. Pins only apply to the
+    root crate of a workspace, so they mean nothing in an index; a few old
+    manifests have them (even empty) as leftovers, which new ones must not."""
+    if "pins" in manifest:
+        return [f"manifest {path} has pins, which are not allowed in the "
+                f"community index (not even an empty [[pins]] table)"]
+    return []
+
+
 def version_suffix_problems(version: str, where: str) -> list[str]:
     """Return the problems with the length of what follows X.Y.Z in
     `version`, found in `where`."""
@@ -173,6 +183,7 @@ def check() -> list[str]:
                     problems += manifest_size_problems(path)
                     manifest = load(HEAD, path)
                     problems += nesting_problems(manifest, path)
+                    problems += pins_problems(manifest, path)
                     if match["version"] != EXTERNAL:
                         problems += version_suffix_problems(
                             match["version"], f"file name {path}")
