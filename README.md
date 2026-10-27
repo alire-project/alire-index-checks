@@ -32,6 +32,16 @@ cd <alire-index checkout>
 ALL_CRATES=1 DRY_RUN=1 <alire-index-checks>/scripts/check-automerge.py
 ```
 
+`scripts/automerge-bot.py` is the bot itself, run periodically by
+alire-index. For each open PR, it merges the head locally with the base branch
+in a bare repository, evaluates it with `automerge.py`, and then requires no
+veto (the `auto-merge: veto` label, or changes requested by a maintainer),
+passing checks, a successful build of every release, one hour since the last
+push or the PR leaving draft (except withdrawals), and at most 10 releases by
+the author merged automatically in the last day. In `dry-run` mode it only
+logs its decisions to a tracking issue; in `on` mode it labels, comments and
+merges. Its offline tests are in `tests/test_automerge_bot.py`.
+
 ## Mirror workflows
 
 Every check run by alire-index has a **mirror workflow** in this repository,

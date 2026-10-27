@@ -75,3 +75,24 @@ jobs:
     - name: Test auto-merge eligibility
       run: tests/test-check-automerge.sh
       shell: bash
+
+  automerge-bot:
+    name: "Self-test: automerge-bot" # Unique, as a required check name
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install dependencies
+      run: pip install -r requirements.txt
+      shell: bash
+
+    - name: Test auto-merge bot decisions
+      run: python -m unittest discover -s tests -p 'test_*.py' -v
+      shell: bash
