@@ -7,6 +7,25 @@ The scripts in `scripts/` are run by the workflows of
 submission. alire-index checks out this repository at the branch matching the
 PR target, so changes merged here take effect there immediately.
 
+## Auto-merge eligibility
+
+`scripts/automerge.py` decides whether a PR may be merged without a manual
+review, as described in
+[AEP-6](https://github.com/alire-project/alire/blob/master/doc/AEPs/aep-0006-auto-merge.md):
+new releases of existing crates, by their maintainers, keeping the properties
+that only a manual review may change, or withdrawals. It is meant for the
+auto-merge bot, not for a check on every PR, so it has no mirror workflow.
+
+`scripts/check-automerge.py <login>` reports the same from the command
+line. With `ALL_CRATES` it replays the history of an index instead, comparing
+every release with the previous one, and prints how many would have been
+eligible and which properties changed in the rest:
+
+```
+cd <alire-index checkout>
+ALL_CRATES=1 DRY_RUN=1 <alire-index-checks>/scripts/check-automerge.py
+```
+
 ## Mirror workflows
 
 Every check run by alire-index has a **mirror workflow** in this repository,

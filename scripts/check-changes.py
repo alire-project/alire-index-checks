@@ -39,17 +39,12 @@ import sys
 from typing import Any
 
 from common import (BASE, EXTERNAL, HEAD, MANIFEST_RE, changed_files, git,
-                    load, report)
+                    is_withdrawal, load, report, version_suffix_problems)
 
 # Crate whose manifests may receive formatting-only changes to test index CI
 TEST_CRATE = "libhello"
 
 SYMLINK_MODE = "120000"
-
-# Maximum length of everything after X.Y.Z in a version: pre-release and build
-# metadata, with their '-' and '+' separators. Same limit as alr's
-# Alire.Index.Max_Version_Suffix_Length.
-MAX_VERSION_SUFFIX_LENGTH = 32
 
 # Maximum size in bytes of an added manifest, to keep the index lean (the
 # largest one is under 7 KiB). alr's own limit (setting
@@ -70,26 +65,13 @@ def is_symlink(path: str) -> bool:
     return entry.split(" ", 1)[0] == SYMLINK_MODE
 
 
-def without_available(manifest: dict[str, Any]) -> dict[str, Any]:
-    """Return a shallow copy of `manifest` without its top-level `available`
-    key, so that a withdrawal can be detected by comparing the remainder of
-    the base and PR versions. Nested `available` keys (e.g. inside a table)
-    are kept, as they are not a withdrawal of the release."""
-    return {k: v for k, v in manifest.items() if k != "available"}
-
-
 def classify_modification(path: str, crate: str) -> str | None:
     """Return a description of an accepted modification, or None if it
     requires review."""
-    old = load(BASE, path)
-    new = load(HEAD, path)
-
-    if (new.get("available") is False
-            and old.get("available") is not False
-            and without_available(new) == without_available(old)):
+    if is_withdrawal(path):
         return "withdrawal (available = false)"
 
-    if crate == TEST_CRATE and new == old:
+    if crate == TEST_CRATE and load(BASE, path) == load(HEAD, path):
         return f"formatting-only {TEST_CRATE} modification"
 
     return None
@@ -163,19 +145,6 @@ def origin_problems(manifest: dict[str, Any], path: str) -> list[str]:
             f"origins)"
             for url in origin_urls(manifest.get("origin", {}))
             if not ORIGIN_URL_RE.match(url)]
-
-
-def version_suffix_problems(version: str, where: str) -> list[str]:
-    """Return the problems with the length of what follows X.Y.Z in
-    `version`, found in `where`."""
-    # X.Y.Z has neither '-' nor '+', so the suffix starts at the first of them
-    starts = [i for i in (version.find("-"), version.find("+")) if i >= 0]
-    suffix = version[min(starts):] if starts else ""
-    if len(suffix) > MAX_VERSION_SUFFIX_LENGTH:
-        return [f"pre-release and build metadata of version {version} in "
-                f"{where} are longer than {MAX_VERSION_SUFFIX_LENGTH} "
-                f"characters in total"]
-    return []
 
 
 def check() -> list[str]:
