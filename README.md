@@ -16,6 +16,12 @@ new releases of existing crates, by their maintainers, keeping the properties
 that only a manual review may change, or withdrawals. It is meant for the
 auto-merge bot, not for a check on every PR, so it has no mirror workflow.
 
+The bot also requires every release to build (or, for binary and system
+crates, to be fetched) on at least one platform, as builds skipped for missing
+dependencies or unavailable releases still succeed. `gh-build-crate.sh`
+reports the outcome of each crate in a single `alire-build` annotation, e.g.
+`built hello=2.1.0;skipped world=1.0.0 (missing dependencies)`.
+
 `scripts/check-automerge.py <login>` reports the same from the command
 line. With `ALL_CRATES` it replays the history of an index instead, comparing
 every release with the previous one, and prints how many would have been
