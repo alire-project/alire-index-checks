@@ -17,7 +17,7 @@ decides, for every open PR to the base branch, whether to:
 
 A PR is merged when it is eligible (automerge.py), no maintainer vetoed it,
 all its checks passed, each new release was built (or fetched) on at least
-one platform, it has cooled off for COOLING_OFF since its last push (except
+one platform, it has cooled off for COOLING_OFF since it last changed (except
 withdrawals), and its author stays within MAX_RELEASES_PER_DAY.
 
 Nothing from the PR is executed: its head is fetched into a bare repository
@@ -31,7 +31,8 @@ Modes:
              are logged as comments in the tracking issue given by --issue.
              As nothing is merged, the rate limit always counts zero
              previous releases.
-    on       Also label and comment on PRs, and merge them.
+    on       Also label and comment on PRs, and merge them. PRs skipped after
+             having been found eligible lose their pending label.
 
 In both modes, a table of decisions is written to $GITHUB_STEP_SUMMARY when
 set, and to the standard output.
@@ -122,6 +123,7 @@ class PullRequest:
     head_sha: str
     draft: bool
     labels: list[str]
+    created_at: datetime
 
 
 @dataclass
@@ -170,9 +172,9 @@ class PRData(Protocol):
     def first_check_at(self) -> datetime | None:
         """When checks first started for the current head of the PR"""
 
-    def ready_at(self) -> datetime | None:
-        """When the PR was last marked ready for review, if it was a draft
-        (as PRs opened by `alr publish` are)"""
+    def changed_at(self) -> datetime | None:
+        """When the PR last left draft (as `alr publish` opens drafts), was
+        reopened, or had its head force-pushed, if ever"""
 
     def recent_releases(self, author: str, since: datetime) -> int:
         """Releases in PRs by `author` merged automatically since `since`"""
@@ -253,10 +255,13 @@ def decide(pr: PullRequest, data: PRData, now: datetime) -> Decision:
         return Decision(MANUAL, [f"{milestone} was not built on any platform"
                                  for milestone in unbuilt], eligibility)
 
-    # Cooling off starts once checks start for the latest push, and the PR
-    # is out of draft, so that maintainers see it for the whole period
-    started = max((time for time in (data.first_check_at(), data.ready_at())
-                   if time), default=now)
+    # Cooling off starts when the PR last changed, so that maintainers see it
+    # for the whole period: when checks first ran on its head, when it was
+    # opened (the head may have been checked long before in another PR), or
+    # when it left draft, was reopened or force-pushed (maybe to an old head)
+    started = max(time for time in (data.first_check_at(), pr.created_at,
+                                    data.changed_at())
+                  if time)
     merge_after = started + COOLING_OFF
     if now < merge_after:
         return Decision(PENDING, ["cooling off"], eligibility, merge_after)
@@ -331,6 +336,8 @@ def pr_comment(pr: PullRequest, decision: Decision) -> str:
     if decision.action == MANUAL:
         text = ("This PR cannot be merged automatically, and will be "
                 "reviewed by the index maintainers:")
+    elif decision.action == SKIP:
+        text = "Automatic merging of this PR is on hold:"
     elif decision.action == PENDING:
         when = (f"after {decision.merge_after:%Y-%m-%d %H:%M} UTC"
                 if decision.merge_after else "once its checks pass")
@@ -379,8 +386,13 @@ class GitHub:
                      "Authorization": f"Bearer {self.token}",
                      "X-GitHub-Api-Version": "2022-11-28",
                      "User-Agent": "alire-automerge-bot"})
-        with urllib.request.urlopen(request, timeout=60) as response:
-            data = response.read()
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                data = response.read()
+        except urllib.error.HTTPError as e:
+            # Keep GitHub's explanation, e.g. why a merge was refused
+            raise OSError(f"{method} {path}: {e.code} "
+                          f"{e.read().decode(errors='replace')}") from e
         return json.loads(data) if data else None
 
     def get_all(self, path: str, params: dict[str, Any] | None = None,
@@ -474,11 +486,12 @@ class LivePRData:
                  for suite in suites]
         return min(times, default=None)
 
-    def ready_at(self) -> datetime | None:
+    def changed_at(self) -> datetime | None:
         times = [datetime.fromisoformat(event["created_at"])
                  for event in self.gh.get_all(
                      f"/repos/{{repo}}/issues/{self.pr.number}/timeline")
-                 if event.get("event") == "ready_for_review"]
+                 if event.get("event") in ("ready_for_review", "reopened",
+                                           "head_ref_force_pushed")]
         return max(times, default=None)
 
     def recent_releases(self, author: str, since: datetime) -> int:
@@ -530,8 +543,10 @@ class Bot:
                             f"/repos/{{repo}}/issues/{pr.number}/labels",
                             {"labels": [wanted]})
 
-    def comment(self, pr: PullRequest, body: str) -> None:
-        """Create or update the bot's comment on a PR."""
+    def comment(self, pr: PullRequest, body: str,
+                only_update: bool = False) -> None:
+        """Create or update the bot's comment on a PR (only update it, with
+        `only_update`)."""
         for comment in self.gh.get_all(
                 f"/repos/{{repo}}/issues/{pr.number}/comments"):
             if (comment["user"]["login"] == self.bot_login
@@ -542,14 +557,24 @@ class Bot:
                         f"/repos/{{repo}}/issues/comments/{comment['id']}",
                         {"body": body})
                 return
-        self.gh.request("POST", f"/repos/{{repo}}/issues/{pr.number}/comments",
-                        {"body": body})
+        if not only_update:
+            self.gh.request("POST",
+                            f"/repos/{{repo}}/issues/{pr.number}/comments",
+                            {"body": body})
 
     def apply(self, pr: PullRequest, decision: Decision) -> None:
-        if decision.action == SKIP:
-            return
         if self.mode == "dry-run":
-            self.log(pr, decision)
+            if decision.action != SKIP:
+                self.log(pr, decision)
+            return
+
+        if decision.action == SKIP:
+            # Withdraw an earlier promise to merge
+            if PENDING_LABEL in pr.labels:
+                self.gh.request("DELETE", f"/repos/{{repo}}/issues/"
+                                f"{pr.number}/labels/"
+                                + urllib.parse.quote(PENDING_LABEL))
+                self.comment(pr, pr_comment(pr, decision), only_update=True)
             return
 
         if decision.action == MERGE:
@@ -568,7 +593,8 @@ def pull_request(data: dict[str, Any]) -> PullRequest:
     return PullRequest(number=data["number"], title=data["title"],
                        author=data["user"]["login"],
                        head_sha=data["head"]["sha"], draft=data["draft"],
-                       labels=[label["name"] for label in data["labels"]])
+                       labels=[label["name"] for label in data["labels"]],
+                       created_at=datetime.fromisoformat(data["created_at"]))
 
 
 def summary(rows: list[tuple[PullRequest, str, str]], mode: str) -> str:
@@ -576,7 +602,7 @@ def summary(rows: list[tuple[PullRequest, str, str]], mode: str) -> str:
              "| PR | Author | Decision | Reasons |", "|---|---|---|---|"]
     for pr, action, reasons in rows:
         lines.append(f"| {pr.number} | `{pr.author}` | {action} | "
-                     f"{reasons.replace('|', '/')} |")
+                     f"{neutralize(reasons).replace('|', '/')} |")
     return "\n".join(lines) + "\n"
 
 
@@ -628,8 +654,8 @@ def main() -> int:
                             + len(decision.eligibility.releases))
                 rows.append((pr, decision.action,
                              "; ".join(decision.reasons)))
-            except (urllib.error.URLError, subprocess.CalledProcessError,
-                    ValueError, KeyError) as e:
+            except (OSError, subprocess.CalledProcessError, ValueError,
+                    KeyError) as e:  # OSError includes HTTP errors, timeouts
                 errors += 1
                 rows.append((pr, "error", str(e)))
 

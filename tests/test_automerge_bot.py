@@ -44,7 +44,7 @@ class FakeData:
     annotations: list = field(
         default_factory=lambda: ["built hello=2.1.0"])
     started: datetime | None = NOW - timedelta(hours=2)
-    ready: datetime | None = None
+    changed: datetime | None = None
     recent: int = 0
     asked: list = field(default_factory=list)
 
@@ -69,8 +69,8 @@ class FakeData:
     def first_check_at(self):
         return self.started
 
-    def ready_at(self):
-        return self.ready
+    def changed_at(self):
+        return self.changed
 
     def recent_releases(self, author, since):
         assert since == NOW - bot.RATE_WINDOW
@@ -79,7 +79,8 @@ class FakeData:
 
 def pr(**changes) -> "bot.PullRequest":
     values = dict(number=7, title="hello 2.1.0", author="bob",
-                  head_sha="abc123", draft=False, labels=[])
+                  head_sha="abc123", draft=False, labels=[],
+                  created_at=NOW - timedelta(days=1))
     values.update(changes)
     return bot.PullRequest(**values)
 
@@ -211,15 +212,23 @@ class TestDecide(unittest.TestCase):
         decision = self.decide(FakeData(started=NOW - bot.COOLING_OFF))
         self.assertEqual(decision.action, bot.MERGE)
 
-    def test_cooling_off_after_ready_for_review(self):
-        ready = NOW - timedelta(minutes=10)
-        decision = self.decide(FakeData(ready=ready))
+    def test_cooling_off_after_change(self):
+        # Left draft, reopened or force-pushed
+        changed = NOW - timedelta(minutes=10)
+        decision = self.decide(FakeData(changed=changed))
         self.assertEqual(decision.action, bot.PENDING)
-        self.assertEqual(decision.merge_after, ready + bot.COOLING_OFF)
+        self.assertEqual(decision.merge_after, changed + bot.COOLING_OFF)
 
-    def test_cooled_off_after_ready_for_review(self):
-        decision = self.decide(FakeData(ready=NOW - bot.COOLING_OFF))
+    def test_cooled_off_after_change(self):
+        decision = self.decide(FakeData(changed=NOW - bot.COOLING_OFF))
         self.assertEqual(decision.action, bot.MERGE)
+
+    def test_cooling_off_after_opening_with_old_head(self):
+        # The head was checked long ago (e.g. in a PR to another branch)
+        opened = NOW - timedelta(minutes=5)
+        decision = self.decide(created_at=opened)
+        self.assertEqual(decision.action, bot.PENDING)
+        self.assertEqual(decision.merge_after, opened + bot.COOLING_OFF)
 
     def test_withdrawal_skips_build_and_cooling_off(self):
         data = FakeData(result=eligible(("hello", "1.0.0"), kind=WITHDRAWALS),
@@ -318,6 +327,25 @@ class TestEffects(unittest.TestCase):
         bot.Bot(gh, "on", self.BOT, None).apply(pr(), bot.Decision(
             bot.SKIP, ["draft"]))
         self.assertEqual(gh.requests, [])
+
+    def test_skip_withdraws_pending(self):
+        pending = comment(self.BOT, bot.pr_comment(pr(), self.decision(
+            bot.PENDING)), id=5)
+        gh = FakeGitHub([pending])
+        skip = bot.Decision(bot.SKIP, ["conflicts with the base branch"])
+        bot.Bot(gh, "on", self.BOT, None).apply(
+            pr(labels=[bot.PENDING_LABEL]), skip)
+        self.assertEqual([(m, p) for m, p, _ in gh.requests], [
+            ("DELETE", "/repos/{repo}/issues/7/labels/auto-merge%3A%20pending"),
+            ("PATCH", "/repos/{repo}/issues/comments/5")])
+        self.assertIn("on hold", gh.requests[1][2]["body"])
+
+    def test_skip_without_comment_posts_none(self):
+        gh = FakeGitHub()
+        bot.Bot(gh, "on", self.BOT, None).apply(
+            pr(labels=[bot.PENDING_LABEL]),
+            bot.Decision(bot.SKIP, ["draft"]))
+        self.assertEqual([m for m, _, _ in gh.requests], ["DELETE"])
 
     def test_dry_run_logs_new_decision_only(self):
         manual = self.decision(bot.MANUAL, "reason")
