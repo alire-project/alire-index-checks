@@ -114,6 +114,27 @@ fi
 
 alr index --check 2>&1 | grep "Warning:" && exit 1
 
+# Outcome of each tested crate: "built", "fetched" (binary and system crates,
+# which are not built) or "skipped (<reason>)", reported in a single
+# annotation at the end (see report_outcomes)
+outcomes=()
+
+function outcome() {
+   # Record outcome $1 for milestone $2, with reason $3 for skipped ones
+   outcomes+=("$1 $2${3:+ ($3)}")
+}
+
+function report_outcomes() {
+   # Report the outcomes as a workflow annotation, which the auto-merge bot
+   # reads through the GitHub API: a release must build (or be fetched) on at
+   # least one platform, while skipped crates still make the job succeed. A
+   # single annotation is used as GitHub keeps only 10 per step.
+   local IFS=";"
+   if [[ ${#outcomes[@]} -gt 0 ]]; then
+      echo "::notice title=alire-build::${outcomes[*]}"
+   fi
+}
+
 # Test crate
 for file in $CHANGES; do
 
@@ -164,6 +185,7 @@ for file in $CHANGES; do
    # Skip on explicit unavailability
    if alr show --system $milestone | grep -q 'Available when: False'; then
       echo SKIPPING crate build: $milestone UNAVAILABLE on system
+      outcome skipped $milestone "unavailable"
       continue
    fi
 
@@ -171,6 +193,7 @@ for file in $CHANGES; do
    # TODO: remove when fixed in alr
    if alr show --system $milestone 2>&1 | grep -q 'Binary archive is unavailable'; then
       echo SKIPPING crate build: $milestone UNAVAILABLE on system
+      outcome skipped $milestone "unavailable"
       continue
    fi
 
@@ -204,6 +227,7 @@ for file in $CHANGES; do
    if grep -q 'Origin: (unavailable on current platform)' <<< $crateinfo ; then
       echo SKIPPING build for crate $milestone with UNAVAILABLE binary origin
       apply_label "unavailable: $distro"
+      outcome skipped $milestone "unavailable"
       continue
    fi
 
@@ -212,6 +236,7 @@ for file in $CHANGES; do
    if grep -q 'Dependencies (missing):' <<< $solution ; then
       echo SKIPPING build for crate $milestone with MISSING external dependencies
       apply_label "missing dependencies: $distro"
+      outcome skipped $milestone "missing dependencies"
       continue
    fi
 
@@ -245,6 +270,7 @@ for file in $CHANGES; do
    # externals should be tested.
    if grep -q 'Origin: external path' <<< $crateinfo ; then
       echo SKIPPING detected external crate $milestone
+      outcome skipped $milestone "external"
       continue
    elif grep -q 'Origin: system package' <<< $crateinfo ; then
       echo INSTALLING detected system crate $milestone
@@ -253,6 +279,7 @@ for file in $CHANGES; do
         grep -q 'There are external definitions' <<< $crateinfo
    then
       echo SKIPPING undetected external crate $crate
+      outcome skipped $milestone "undetected external"
       continue
    fi
 
@@ -261,6 +288,7 @@ for file in $CHANGES; do
    if grep -q 'Dependencies cannot be met' <<< $solution ; then
       echo "SKIPPING build of crate $milestone with MISSING regular dependencies"
       apply_label "missing dependencies: $distro"
+      outcome skipped $milestone "missing dependencies"
       continue
    fi
 
@@ -279,8 +307,10 @@ for file in $CHANGES; do
    if $is_system; then
       echo DETECTING INSTALLED PACKAGE via crate $milestone
       alr show --external-detect $milestone
+      outcome fetched $milestone
    elif $is_binary; then
       echo FETCHED BINARY crate OK
+      outcome fetched $milestone
       # Clean-up latest test to free space for more tests to come in the same commit
       release_base=$(alr get --dirname $milestone)
       echo "Freeing up $(du -sh $release_base | cut -f1) used by $milestone"
@@ -320,6 +350,8 @@ for file in $CHANGES; do
       # latest one is requested. We make an explicit attempt with gnat_native
       # for such cases. This should be corrected in 2.1 and the `native`
       # attempt can then be removed.
+
+      tested=built # Unless no toolchain is usable, see below
 
       for toolchain_source in system indexed native; do
 
@@ -386,6 +418,7 @@ for file in $CHANGES; do
             echo "No point in trying other toolchains, exiting with dependencies:"
             alr with --tree
             echo "SKIPPING TEST BECAUSE OF gprbuild GLIBC DEPENDENCIES"
+            tested=skipped
             break
          else
             echo gprbuild ldd dependencies OK
@@ -441,6 +474,12 @@ for file in $CHANGES; do
       echo LISTING EXECUTABLES of crate $milestone
       alr run --list
 
+      if [[ $tested == built ]]; then
+         outcome built $milestone
+      else
+         outcome skipped $milestone "toolchain too new for the system"
+      fi
+
       popd
 
       # Clean-up latest test to free space for more tests to come in the same commit
@@ -450,3 +489,5 @@ for file in $CHANGES; do
 
    echo CRATE $milestone TEST ENDED SUCCESSFULLY
 done
+
+report_outcomes
