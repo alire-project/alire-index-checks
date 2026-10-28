@@ -207,6 +207,7 @@ class TestDecide(unittest.TestCase):
         decision = self.decide(FakeData(started=started))
         self.assertEqual(decision.action, bot.PENDING)
         self.assertEqual(decision.merge_after, started + bot.COOLING_OFF)
+        self.assertEqual(decision.reasons, ["cooling off: 1m left"])
 
     def test_cooled_off(self):
         decision = self.decide(FakeData(started=NOW - bot.COOLING_OFF))
@@ -247,6 +248,23 @@ class TestDecide(unittest.TestCase):
     def test_rate_limit_reached_exactly(self):
         data = FakeData(recent=bot.MAX_RELEASES_PER_DAY - 1)
         self.assertEqual(self.decide(data).action, bot.MERGE)
+
+
+class TestDuration(unittest.TestCase):
+
+    def test_formats(self):
+        for span, text in [
+                (timedelta(seconds=45), "45s"),
+                (timedelta(minutes=23, seconds=59), "23m"),
+                (timedelta(minutes=23), "23m"),
+                (timedelta(hours=1), "1h"),
+                (timedelta(hours=1, minutes=5, seconds=30), "1h 5m"),
+                (timedelta(hours=1, seconds=30), "1h"),
+                (timedelta(days=2, hours=3, minutes=4), "2d 3h"),
+                (timedelta(days=1, minutes=4), "1d"),
+                (timedelta(days=1, hours=2, minutes=59), "1d 2h"),
+                (timedelta(0), "0s")]:
+            self.assertEqual(bot.duration(span), text)
 
 
 class TestParsing(unittest.TestCase):
@@ -527,6 +545,22 @@ class CountingData(FakeData):
         return self.merged_in_run.get(author, 0)
 
 
+class TestSummary(unittest.TestCase):
+
+    def test_one_release_per_line(self):
+        text = bot.summary([
+            (1, "bob", bot.MERGE, "ok", ["a=1.0.0", "b=2.0.0"]),
+            (2, "eve", bot.SKIP, "draft", [])], "dry-run")
+        self.assertIn("| PR | Author | Release | Decision | Reasons |", text)
+        self.assertIn("| 1 | `bob` | a=1.0.0 | merge | ok |\n"
+                      "| 1 | `bob` | b=2.0.0 | merge | ok |\n", text)
+        self.assertIn("| 2 | `eve` |  | skip | draft |", text)
+
+    def test_milestones_unknown_for_skips(self):
+        self.assertEqual(bot.milestones(bot.Decision(bot.SKIP, ["draft"])),
+                         [])
+
+
 class TestProcess(unittest.TestCase):
 
     def run_prs(self, prs, pr_data=None, mode="on", fetch=lambda: None,
@@ -544,6 +578,7 @@ class TestProcess(unittest.TestCase):
     def test_merges_all(self):
         rows, errors = self.run_prs([pr_listing(1), pr_listing(2)])
         self.assertEqual([row[2] for row in rows], [bot.MERGE, bot.MERGE])
+        self.assertEqual(rows[0][4], ["c0=1.0.0"])
         self.assertEqual(errors, 0)
         self.assertEqual(len(self.merges()), 2)
 

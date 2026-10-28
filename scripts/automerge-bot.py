@@ -189,6 +189,26 @@ class PRData(Protocol):
 # --- Decisions (no side effects)
 
 
+# Custom to avoid a dependency
+def duration(span: timedelta) -> str:
+    """Return a short text for a time span, rounded down to its two largest
+    units, and to minutes unless shorter: 2d 3h, 1h 5m, 1h, 23m, 45s."""
+
+    seconds = max(int(span.total_seconds()), 0)
+    if seconds < 60:
+        return f"{seconds}s"
+    parts = []
+    for name, size in [("d", 86400), ("h", 3600), ("m", 60)]:
+        if seconds >= size or parts:
+            parts.append((seconds // size, name))
+            seconds %= size
+    # Two units at most, without a trailing zero ("1h", not "1h 0m")
+    parts = parts[:2]
+    if len(parts) == 2 and parts[1][0] == 0:
+        parts.pop()
+    return " ".join(f"{value}{name}" for value, name in parts)
+
+
 def build_outcomes(messages: list[str]) -> dict[str, set[str]]:
     """Return {milestone: outcomes} from BUILD_ANNOTATION messages, which
     look like "built hello=1.0.0;skipped world=2.0.0 (missing ...)"."""
@@ -271,7 +291,9 @@ def decide(pr: PullRequest, data: PRData, now: datetime) -> Decision:
                   if time)
     merge_after = started + COOLING_OFF
     if now < merge_after:
-        return Decision(PENDING, ["cooling off"], eligibility, merge_after)
+        return Decision(PENDING,
+                        [f"cooling off: {duration(merge_after - now)} left"],
+                        eligibility, merge_after)
 
     recent = data.recent_releases(pr.author, now - RATE_WINDOW)
     if recent + len(eligibility.releases) > MAX_RELEASES_PER_DAY:
@@ -661,20 +683,36 @@ def pull_request(data: dict[str, Any]) -> PullRequest:
                        created_at=datetime.fromisoformat(data["created_at"]))
 
 
-def summary(rows: list[tuple[int, str, str, str]], mode: str) -> str:
-    """Return a Markdown table of (PR number, author, decision, reasons)."""
+# Row of the summary: PR number, author, decision, reasons and releases
+Row = tuple[int, str, str, str, list[str]]
+
+
+def milestones(decision: Decision) -> list[str]:
+    """Return the releases a decision is about, when known (they are not for
+    PRs skipped before being evaluated, e.g. drafts)."""
+    if not decision.eligibility:
+        return []
+    return [f"{crate}={version}"
+            for crate, version in decision.eligibility.releases]
+
+
+def summary(rows: list[Row], mode: str) -> str:
+    """Return a Markdown table of the rows, with one line per release (the
+    PR is repeated for PRs with several releases)."""
     lines = [f"## Auto-merge ({mode})", "",
-             "| PR | Author | Decision | Reasons |", "|---|---|---|---|"]
-    for number, author, action, reasons in rows:
-        lines.append(f"| {number} | `{author}` | {action} | "
-                     f"{neutralize(reasons).replace('|', '/')} |")
+             "| PR | Author | Release | Decision | Reasons |",
+             "|---|---|---|---|---|"]
+    for number, author, action, reasons, releases in rows:
+        for release in releases or [""]:
+            lines.append(f"| {number} | `{author}` | {release} | {action} | "
+                         f"{neutralize(reasons).replace('|', '/')} |")
     return "\n".join(lines) + "\n"
 
 
 def process(prs: list[dict[str, Any]],
             pr_data: Callable[[PullRequest, dict[str, int]], PRData],
             bot: Bot, fetch_base: Callable[[], None],
-            now: datetime) -> tuple[list[tuple[int, str, str, str]], int]:
+            now: datetime) -> tuple[list[Row], int]:
     """Decide and act on every PR (as listed by the API), oldest first.
     Return the rows of the summary and the number of errors."""
     rows = []
@@ -687,7 +725,7 @@ def process(prs: list[dict[str, Any]],
         if stale_base:
             rows.append((number, author, "not processed",
                          "the base branch could not be fetched after a "
-                         "merge"))
+                         "merge", []))
             continue
         try:
             pr = pull_request(data)
@@ -711,7 +749,7 @@ def process(prs: list[dict[str, Any]],
             else:
                 bot.apply(pr, decision)
             rows.append((number, author, decision.action,
-                         "; ".join(decision.reasons)))
+                         "; ".join(decision.reasons), milestones(decision)))
         except WrongIdentity:
             raise  # Every comment would be posted again on every run
         except Exception as e:
@@ -720,7 +758,7 @@ def process(prs: list[dict[str, Any]],
             traceback.print_exc()
             errors += 1
             rows.append((number, author, "error",
-                         f"{type(e).__name__}: {e}"))
+                         f"{type(e).__name__}: {e}", []))
     return rows, errors
 
 
