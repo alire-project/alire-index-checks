@@ -209,6 +209,23 @@ pr_commit
 expect fail "version that is not strict semver"
 
 new_repo
+hello 2.1.0 > index/he/hello/hello-2.1.0.toml
+hello 2.1.0+x > index/he/hello/hello-2.1.0+x.toml
+pr_commit
+expect fail "two versions with the same precedence in the same PR"
+
+new_repo
+hello 2.1.0 | sed 's/^name = "hello"/name = "victim"/' \
+    > index/he/hello/hello-2.1.0.toml
+pr_commit
+expect fail "name in the manifest differs from its file name"
+
+new_repo
+hello 2.1.0+x > index/he/hello/hello-2.1.0.toml
+pr_commit
+expect fail "version in the manifest differs from its file name"
+
+new_repo
 add_hello
 mkdir -p index/ne/newcrate
 manifest newcrate 1.0.0 '"bob"' > index/ne/newcrate/newcrate-1.0.0.toml

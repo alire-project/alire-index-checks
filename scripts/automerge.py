@@ -37,7 +37,10 @@ from common import (BASE, EXTERNAL, HEAD, MANIFEST_RE, authority,
 
 # Properties that only a manual review may change, as they decide who
 # maintains a crate, which crates it stands for or excludes, and what runs on
-# users' machines besides the build
+# users' machines besides the build. `build-switches` is left out on purpose:
+# some switches (e.g. GCC's -wrapper) run programs during the build, but the
+# crate's project files, which change freely with its sources, can do the
+# same, and code run by the build is out of scope for AEP-6.
 UNCHANGEABLE = ["maintainers-logins", "provides", "forbids", "actions",
                 "environment", "gpr-set-externals", "mirror"]
 
@@ -145,9 +148,34 @@ def release_reasons(path: str, crate: str, version: str,
         except ValueError:
             pass  # Not strict, so it cannot equal a strict version
 
+    # Authority is decided from the file path, so the release must be the
+    # one the path says (alr checks it too, this does not rely on it)
+    new = load(HEAD, path)
+    if new.get("name") != crate or new.get("version") != version:
+        reasons.append(f"{crate}: name or version in {path} differ from its "
+                       f"file name")
+
     old_version = MANIFEST_RE.match(source)["version"]
-    return reasons + change_reasons(crate, load(BASE, source),
-                                    load(HEAD, path), old_version)
+    return reasons + change_reasons(crate, load(BASE, source), new,
+                                    old_version)
+
+
+def added_twice_reasons(crate: str, version: str,
+                        added: dict[str, list[tuple[Version, str]]]
+                        ) -> list[str]:
+    """Return the reason why `version` of `crate` duplicates another release
+    added by the same PR, if so, recording it in `added`. Releases in the
+    base branch are checked by release_reasons."""
+    try:
+        parsed = Version.parse(version)
+    except ValueError:
+        return []  # Reported by release_reasons
+    reasons = [f"{crate}: version {version} has the same precedence as "
+               f"{other}, also added by the PR"
+               for other_parsed, other in added.get(crate, [])
+               if other_parsed == parsed]
+    added.setdefault(crate, []).append((parsed, version))
+    return reasons
 
 
 def evaluate(author: str) -> Eligibility:
@@ -156,6 +184,7 @@ def evaluate(author: str) -> Eligibility:
     releases = []
     reasons = []
     kinds = set()
+    added: dict[str, list[tuple[Version, str]]] = {}  # By crate
 
     changes = changed_files()
     if not changes:
@@ -178,6 +207,7 @@ def evaluate(author: str) -> Eligibility:
             if status == "A":
                 kinds.add(RELEASES)
                 reasons += release_reasons(path, crate, version, author)
+                reasons += added_twice_reasons(crate, version, added)
             elif status == "M" and is_withdrawal(path):
                 kinds.add(WITHDRAWALS)
                 reasons += maintainer_reasons(
