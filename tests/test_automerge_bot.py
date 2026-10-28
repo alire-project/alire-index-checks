@@ -355,6 +355,30 @@ class TestEffects(unittest.TestCase):
             ("PATCH", "/repos/{repo}/issues/comments/5")])
         self.assertIn("on hold", gh.requests[1][2]["body"])
 
+    def test_label_already_removed(self):
+        class GoneLabel(FakeGitHub):
+            def request(self, method, path, body=None, params=None):
+                if method == "DELETE":
+                    raise bot.HTTPError(404, "Label does not exist")
+                return super().request(method, path, body, params)
+
+        gh = GoneLabel()
+        bot.Bot(gh, "on", self.BOT, None).apply(
+            pr(labels=[bot.PENDING_LABEL]), self.decision(bot.MANUAL))
+        self.assertIn(("POST", "/repos/{repo}/issues/7/labels",
+                       {"labels": [bot.MANUAL_LABEL]}), gh.requests)
+
+    def test_other_label_errors_propagate(self):
+        class Broken(FakeGitHub):
+            def request(self, method, path, body=None, params=None):
+                if method == "DELETE":
+                    raise bot.HTTPError(500, "Server error")
+                return super().request(method, path, body, params)
+
+        with self.assertRaises(bot.HTTPError):
+            bot.Bot(Broken(), "on", self.BOT, None).apply(
+                pr(labels=[bot.PENDING_LABEL]), self.decision(bot.MANUAL))
+
     def test_skip_without_comment_posts_none(self):
         gh = FakeGitHub()
         bot.Bot(gh, "on", self.BOT, None).apply(

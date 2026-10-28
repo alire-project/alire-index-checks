@@ -175,7 +175,8 @@ class PRData(Protocol):
 
     def changed_at(self) -> datetime | None:
         """When the PR last left draft (as `alr publish` opens drafts), was
-        reopened, or had its head force-pushed, if ever"""
+        reopened, retargeted from another base branch, or had its head
+        force-pushed, if ever"""
 
     def recent_releases(self, author: str, since: datetime) -> int:
         """Releases in PRs by `author` merged automatically since `since`"""
@@ -259,7 +260,8 @@ def decide(pr: PullRequest, data: PRData, now: datetime) -> Decision:
     # Cooling off starts when the PR last changed, so that maintainers see it
     # for the whole period: when checks first ran on its head, when it was
     # opened (the head may have been checked long before in another PR), or
-    # when it left draft, was reopened or force-pushed (maybe to an old head)
+    # when it left draft, was reopened, retargeted or force-pushed (maybe to
+    # an old head)
     started = max(time for time in (data.first_check_at(), pr.created_at,
                                     data.changed_at())
                   if time)
@@ -376,6 +378,14 @@ def previous_decisions(comments: list[dict[str, Any]],
 # --- GitHub
 
 
+class HTTPError(OSError):
+    """An HTTP error answered by GitHub, with its explanation."""
+
+    def __init__(self, code: int, message: str):
+        super().__init__(message)
+        self.code = code
+
+
 class GitHub:
     """Minimal client for the GitHub REST API."""
 
@@ -400,8 +410,8 @@ class GitHub:
                 data = response.read()
         except urllib.error.HTTPError as e:
             # Keep GitHub's explanation, e.g. why a merge was refused
-            raise OSError(f"{method} {path}: {e.code} "
-                          f"{e.read().decode(errors='replace')}") from e
+            raise HTTPError(e.code, f"{method} {path}: {e.code} "
+                            f"{e.read().decode(errors='replace')}") from e
         return json.loads(data) if data else None
 
     def get_all(self, path: str, params: dict[str, Any] | None = None,
@@ -515,6 +525,7 @@ class LivePRData:
                  for event in self.gh.get_all(
                      f"/repos/{{repo}}/issues/{self.pr.number}/timeline")
                  if event.get("event") in ("ready_for_review", "reopened",
+                                           "base_ref_changed",
                                            "head_ref_force_pushed")]
         return max(times, default=None)
 
@@ -567,13 +578,20 @@ class Bot:
         self.post("POST", f"/repos/{{repo}}/issues/{self.issue}/comments",
                   log_entry(pr, decision, dry_run=True))
 
+    def unlabel(self, pr: PullRequest, label: str) -> None:
+        """Remove a label, unless someone did it after the PR was listed."""
+        try:
+            self.gh.request("DELETE", f"/repos/{{repo}}/issues/{pr.number}"
+                            f"/labels/" + urllib.parse.quote(label))
+        except HTTPError as e:
+            if e.code != 404:
+                raise
+
     def label(self, pr: PullRequest, wanted: str) -> None:
         """Leave `wanted` as the only label of the bot on the PR."""
         for label in (PENDING_LABEL, MANUAL_LABEL, MERGED_LABEL):
             if label in pr.labels and label != wanted:
-                self.gh.request("DELETE", f"/repos/{{repo}}/issues/"
-                                f"{pr.number}/labels/"
-                                + urllib.parse.quote(label))
+                self.unlabel(pr, label)
         if wanted not in pr.labels:
             self.gh.request("POST",
                             f"/repos/{{repo}}/issues/{pr.number}/labels",
@@ -615,9 +633,7 @@ class Bot:
         if decision.action == SKIP:
             # Withdraw an earlier promise to merge
             if PENDING_LABEL in pr.labels:
-                self.gh.request("DELETE", f"/repos/{{repo}}/issues/"
-                                f"{pr.number}/labels/"
-                                + urllib.parse.quote(PENDING_LABEL))
+                self.unlabel(pr, PENDING_LABEL)
                 self.comment(pr, pr_comment(pr, decision), only_update=True)
             return
 
