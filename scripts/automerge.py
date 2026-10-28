@@ -145,9 +145,16 @@ def release_reasons(path: str, crate: str, version: str,
         except ValueError:
             pass  # Not strict, so it cannot equal a strict version
 
+    # Authority is decided from the file path, so the release must be the
+    # one the path says (alr checks it too, this does not rely on it)
+    new = load(HEAD, path)
+    if new.get("name") != crate or new.get("version") != version:
+        reasons.append(f"{crate}: name or version in {path} differ from its "
+                       f"file name")
+
     old_version = MANIFEST_RE.match(source)["version"]
-    return reasons + change_reasons(crate, load(BASE, source),
-                                    load(HEAD, path), old_version)
+    return reasons + change_reasons(crate, load(BASE, source), new,
+                                    old_version)
 
 
 def evaluate(author: str) -> Eligibility:
