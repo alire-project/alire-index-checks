@@ -37,7 +37,10 @@ from common import (BASE, EXTERNAL, HEAD, MANIFEST_RE, authority,
 
 # Properties that only a manual review may change, as they decide who
 # maintains a crate, which crates it stands for or excludes, and what runs on
-# users' machines besides the build
+# users' machines besides the build. `build-switches` is left out on purpose:
+# some switches (e.g. GCC's -wrapper) run programs during the build, but the
+# crate's project files, which change freely with its sources, can do the
+# same, and code run by the build is out of scope for AEP-6.
 UNCHANGEABLE = ["maintainers-logins", "provides", "forbids", "actions",
                 "environment", "gpr-set-externals", "mirror"]
 

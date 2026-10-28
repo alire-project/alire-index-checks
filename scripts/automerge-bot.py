@@ -58,6 +58,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -288,11 +289,13 @@ def decide(pr: PullRequest, data: PRData, now: datetime) -> Decision:
 
 def neutralize(text: str) -> str:
     """Return text from a PR (its title, or file names in reasons) safe to
-    include in the bot's comments: as HTML entities, `@` and `#` cannot
-    notify users or reference issues, and `<` cannot add HTML (e.g. a fake
-    marker)."""
+    include in the bot's comments: on a single line, and with HTML entities
+    so that `@` and `#` cannot notify users or reference issues, `<` cannot
+    add HTML (e.g. a fake marker) and `[` cannot add links or images."""
+    text = " ".join(text.splitlines())
     for char, entity in (("&", "&amp;"), ("<", "&lt;"), (">", "&gt;"),
-                         ("@", "&#64;"), ("#", "&#35;")):
+                         ("@", "&#64;"), ("#", "&#35;"), ("[", "&#91;"),
+                         ("]", "&#93;")):
         text = text.replace(char, entity)
     return text
 
@@ -349,6 +352,12 @@ def pr_comment(pr: PullRequest, decision: Decision) -> str:
     return f"{marker(pr, decision)}\n{text}\n\n{describe(decision)}\n"
 
 
+def login(item: dict[str, Any]) -> str | None:
+    """Return the login of the author of a comment or review, or None for
+    deleted accounts (the API gives them no user)."""
+    return (item.get("user") or {}).get("login")
+
+
 def previous_decisions(comments: list[dict[str, Any]],
                        bot_login: str) -> dict[int, tuple[str, str]]:
     """Return {PR number: (head SHA, action)} of the latest decision logged
@@ -356,7 +365,7 @@ def previous_decisions(comments: list[dict[str, Any]],
     they cannot suppress or fake entries."""
     decisions = {}
     for comment in comments:
-        if comment["user"]["login"] != bot_login:
+        if login(comment) != bot_login:
             continue
         match = MARKER_RE.search(comment["body"])
         if match:
@@ -427,6 +436,14 @@ class LivePRData:
         self.merged_in_run = merged_in_run
         """Releases merged by author in this run, which searches miss"""
         self._checks: list[CheckRun] | None = None
+        self._suites: list[dict[str, Any]] | None = None
+
+    def suites(self) -> list[dict[str, Any]]:
+        if self._suites is None:
+            self._suites = self.gh.get_all(
+                f"/repos/{{repo}}/commits/{self.pr.head_sha}/check-suites",
+                key="check_suites")
+        return self._suites
 
     def merge_problem(self) -> str | None:
         head = f"refs/pr/{self.pr.number}"
@@ -455,11 +472,11 @@ class LivePRData:
             return evaluate(self.pr.author)
 
     def reviews(self) -> list[Review]:
-        return [Review(review["user"]["login"], review["author_association"],
+        return [Review(login(review), review["author_association"],
                        review["state"])
                 for review in self.gh.get_all(
                     f"/repos/{{repo}}/pulls/{self.pr.number}/reviews")
-                if review.get("user")]
+                if login(review)]
 
     def checks(self) -> list[CheckRun]:
         if self._checks is None:
@@ -469,21 +486,28 @@ class LivePRData:
                 for run in self.gh.get_all(
                     f"/repos/{{repo}}/commits/{self.pr.head_sha}/check-runs",
                     params={"filter": "latest"}, key="check_runs")]
+            # Workflows create check runs only once their jobs start, so a
+            # workflow still queued shows only as an unfinished suite. Those
+            # of other apps are left out, as some never complete.
+            self._checks += [
+                CheckRun(0, f"workflows (suite {suite['id']})",
+                         suite["status"], suite["conclusion"])
+                for suite in self.suites()
+                if (suite.get("app") or {}).get("slug") == "github-actions"
+                and (suite["status"] != "completed"
+                     or suite["conclusion"] not in PASSING)]
         return self._checks
 
     def build_annotations(self) -> list[str]:
         return [annotation["message"]
-                for check in self.checks()
+                for check in self.checks() if check.id
                 for annotation in self.gh.get_all(
                     f"/repos/{{repo}}/check-runs/{check.id}/annotations")
                 if annotation.get("title") == BUILD_ANNOTATION]
 
     def first_check_at(self) -> datetime | None:
-        suites = self.gh.get_all(
-            f"/repos/{{repo}}/commits/{self.pr.head_sha}/check-suites",
-            key="check_suites")
         times = [datetime.fromisoformat(suite["created_at"])
-                 for suite in suites]
+                 for suite in self.suites()]
         return min(times, default=None)
 
     def changed_at(self) -> datetime | None:
@@ -549,7 +573,7 @@ class Bot:
         `only_update`)."""
         for comment in self.gh.get_all(
                 f"/repos/{{repo}}/issues/{pr.number}/comments"):
-            if (comment["user"]["login"] == self.bot_login
+            if (login(comment) == self.bot_login
                     and MARKER_RE.search(comment["body"])):
                 if comment["body"] != body:
                     self.gh.request(
@@ -562,7 +586,16 @@ class Bot:
                             f"/repos/{{repo}}/issues/{pr.number}/comments",
                             {"body": body})
 
+    def merge(self, pr: PullRequest) -> None:
+        """Merge the evaluated head of a PR: GitHub refuses it if the PR
+        changed since, and enforces the required checks. Must precede
+        apply(), which labels and comments the merged PR."""
+        self.gh.request("PUT", f"/repos/{{repo}}/pulls/{pr.number}/merge",
+                        {"merge_method": "squash", "sha": pr.head_sha})
+
     def apply(self, pr: PullRequest, decision: Decision) -> None:
+        """Label and comment according to a decision (on mode), or log it
+        (dry-run mode)."""
         if self.mode == "dry-run":
             if decision.action != SKIP:
                 self.log(pr, decision)
@@ -578,10 +611,6 @@ class Bot:
             return
 
         if decision.action == MERGE:
-            # Merging only the evaluated head: GitHub refuses it if the PR
-            # changed since, and enforces the required checks
-            self.gh.request("PUT", f"/repos/{{repo}}/pulls/{pr.number}/merge",
-                            {"merge_method": "squash", "sha": pr.head_sha})
             self.label(pr, MERGED_LABEL)
         else:
             self.label(pr, PENDING_LABEL if decision.action == PENDING
@@ -643,21 +672,25 @@ def main() -> int:
             try:
                 decision = decide(
                     pr, LivePRData(gh, git_dir, pr, merged_in_run), now)
-                bot.apply(pr, decision)
                 if decision.action == MERGE and args.mode == "on":
-                    # Later PRs must be evaluated against the base including
-                    # this one (e.g. so that a duplicate release is noticed)
-                    fetch_base()
+                    bot.merge(pr)
+                    # Recorded before anything else can fail: the rate limit
+                    # must count it, and later PRs must be evaluated against
+                    # the base including it (e.g. to notice a duplicate)
                     if decision.eligibility.kind == RELEASES:
                         merged_in_run[pr.author] = (
                             merged_in_run.get(pr.author, 0)
                             + len(decision.eligibility.releases))
+                    fetch_base()
+                bot.apply(pr, decision)
                 rows.append((pr, decision.action,
                              "; ".join(decision.reasons)))
-            except (OSError, subprocess.CalledProcessError, ValueError,
-                    KeyError) as e:  # OSError includes HTTP errors, timeouts
+            except Exception as e:
+                # Any failure leaves the PR alone (unmerged, unless it was
+                # merged just before) and the others are still processed
+                traceback.print_exc()
                 errors += 1
-                rows.append((pr, "error", str(e)))
+                rows.append((pr, "error", f"{type(e).__name__}: {e}"))
 
     text = summary(rows, args.mode)
     print(text)

@@ -289,6 +289,12 @@ class TestParsing(unittest.TestCase):
         self.assertEqual(len(bot.MARKER_RE.findall(entry)), 1)
         self.assertNotIn("@", bot.pr_comment(pr(), decision))
 
+    def test_pr_text_stays_on_one_line_without_links(self):
+        text = bot.neutralize("a\n- fake reason\r\n[x](http://e) ![i](u)")
+        self.assertNotIn("\n", text)
+        self.assertNotIn("[", text)
+        self.assertNotIn("]", text)
+
     def test_marker_round_trip(self):
         decision = bot.Decision(bot.PENDING, [])
         match = bot.MARKER_RE.search(bot.pr_comment(pr(), decision))
@@ -297,13 +303,20 @@ class TestParsing(unittest.TestCase):
 
 
 class FakeGitHub:
-    """Records requests; listings return the comments given."""
+    """Records requests. Listings return the comments given, or the items
+    given for the end of their path."""
 
-    def __init__(self, comments=None):
+    repo = "owner/index"
+
+    def __init__(self, comments=None, listings=None):
         self.comments = comments or []
+        self.listings = listings or {}
         self.requests = []
 
     def get_all(self, path, params=None, key=None):
+        for end, items in self.listings.items():
+            if path.endswith(end):
+                return items
         return self.comments
 
     def request(self, method, path, body=None, params=None):
@@ -362,6 +375,14 @@ class TestEffects(unittest.TestCase):
                          [("POST", "/repos/{repo}/issues/99/comments")] * 2)
         self.assertIn("would be merged", gh.requests[1][2]["body"])
 
+    def test_deleted_accounts_are_nobody(self):
+        merge = self.decision(bot.MERGE)
+        ghost = {"id": 1, "user": None,
+                 "body": bot.log_entry(pr(), merge, True)}
+        gh = FakeGitHub([ghost])
+        bot.Bot(gh, "dry-run", self.BOT, 99).apply(pr(), merge)
+        self.assertEqual(len(gh.requests), 1)
+
     def test_dry_run_ignores_comments_by_others(self):
         merge = self.decision(bot.MERGE)
         gh = FakeGitHub([comment("mallory", bot.log_entry(pr(), merge,
@@ -379,8 +400,10 @@ class TestEffects(unittest.TestCase):
 
     def test_on_merges_evaluated_head(self):
         gh = FakeGitHub()
-        bot.Bot(gh, "on", self.BOT, None).apply(
-            pr(labels=[bot.PENDING_LABEL]), self.decision(bot.MERGE))
+        runner = bot.Bot(gh, "on", self.BOT, None)
+        merged = pr(labels=[bot.PENDING_LABEL])
+        runner.merge(merged)
+        runner.apply(merged, self.decision(bot.MERGE))
         self.assertEqual(gh.requests[0], (
             "PUT", "/repos/{repo}/pulls/7/merge",
             {"merge_method": "squash", "sha": "abc123"}))
@@ -408,6 +431,40 @@ class TestEffects(unittest.TestCase):
         bot.Bot(gh, "on", self.BOT, None).apply(
             pr(labels=[bot.PENDING_LABEL]), pending)
         self.assertEqual(gh.requests, [])
+
+
+
+def suite(status, conclusion, slug="github-actions"):
+    return {"id": 9, "app": {"slug": slug}, "status": status,
+            "conclusion": conclusion,
+            "created_at": "2026-10-28T10:00:00Z"}
+
+
+class TestLiveChecks(unittest.TestCase):
+
+    RUN = {"id": 1, "name": "check / Author", "status": "completed",
+           "conclusion": "success"}
+
+    def checks(self, *suites):
+        gh = FakeGitHub(listings={"/check-runs": [self.RUN],
+                                  "/check-suites": list(suites)})
+        return bot.LivePRData(gh, "", pr(), {}).checks()
+
+    def test_completed_suites_add_nothing(self):
+        self.assertEqual(len(self.checks(suite("completed", "success"))), 1)
+
+    def test_queued_workflow_without_runs_is_pending(self):
+        checks = self.checks(suite("queued", None))
+        self.assertEqual(bot.decide(pr(), FakeData(check_list=checks),
+                                    NOW).action, bot.PENDING)
+
+    def test_workflows_awaiting_approval_fail(self):
+        checks = self.checks(suite("completed", "action_required"))
+        self.assertEqual(bot.decide(pr(), FakeData(check_list=checks),
+                                    NOW).action, bot.MANUAL)
+
+    def test_suites_of_other_apps_are_ignored(self):
+        self.assertEqual(len(self.checks(suite("queued", None, "other"))), 1)
 
 
 if __name__ == "__main__":
