@@ -242,6 +242,7 @@ class TestDecide(unittest.TestCase):
         decision = self.decide(data)
         self.assertEqual(decision.action, bot.MANUAL)
         self.assertIn("would exceed", decision.reasons[0])
+        self.assertIn("in the last 24 hours", decision.reasons[0])
 
     def test_rate_limit_reached_exactly(self):
         data = FakeData(recent=bot.MAX_RELEASES_PER_DAY - 1)

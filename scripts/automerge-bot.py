@@ -10,7 +10,7 @@ Usage:
 Meant to run periodically (see auto-merge.yml in alire-index). Each run
 decides, for every open PR to the base branch, whether to:
 
-- skip it for now (drafts and PRs with conflicts);
+- skip it for now (drafts, PRs with conflicts or changed during the run);
 - leave it to a manual review, giving the reasons;
 - wait (an eligible PR whose checks are running, or that is cooling off);
 - merge it.
@@ -44,7 +44,9 @@ Environment:
 
 Exit status:
     0  every PR was processed
-    1  some PR could not be processed (others were)
+    1  some PR could not be processed, or the run stopped early (when the
+       base branch cannot be fetched after a merge, or comments are not posted
+       as --bot-login); see the summary and the log
     2  usage error
 
 Dependencies: tomllib (Python >= 3.11), semver (in requirements.txt)
@@ -69,8 +71,9 @@ from typing import Any, Callable, Protocol
 from automerge import RELEASES, Eligibility, evaluate
 from common import EXTERNAL, MANIFEST_RE
 
-# Time between the last push to an eligible PR and its merge, during which
-# maintainers can veto it. Withdrawals are merged without waiting.
+# Time between the last change to an eligible PR (see decide()) and its
+# merge, during which maintainers can veto it. Withdrawals are merged without
+# waiting.
 COOLING_OFF = timedelta(hours=1)
 
 # Releases that an author may have merged automatically within RATE_WINDOW,
@@ -78,6 +81,7 @@ COOLING_OFF = timedelta(hours=1)
 # review.
 MAX_RELEASES_PER_DAY = 10
 RATE_WINDOW = timedelta(days=1)
+RATE_WINDOW_TEXT = "the last 24 hours"
 
 # Labels. The veto one is set by maintainers, the others by the bot.
 VETO_LABEL = "auto-merge: veto"
@@ -273,7 +277,7 @@ def decide(pr: PullRequest, data: PRData, now: datetime) -> Decision:
     if recent + len(eligibility.releases) > MAX_RELEASES_PER_DAY:
         return Decision(MANUAL, [
             f"{pr.author} would exceed {MAX_RELEASES_PER_DAY} releases "
-            f"merged automatically within {RATE_WINDOW} ({recent} so far)"],
+            f"merged automatically in {RATE_WINDOW_TEXT} ({recent} so far)"],
             eligibility)
 
     return Decision(MERGE, [
@@ -281,8 +285,8 @@ def decide(pr: PullRequest, data: PRData, now: datetime) -> Decision:
         "built or fetched: " + ", ".join(
             f"{crate}={version}" for crate, version in eligibility.releases),
         f"no veto since {started:%Y-%m-%d %H:%M} UTC",
-        f"{recent} other releases by {pr.author} merged automatically "
-        f"within {RATE_WINDOW}"],
+        f"{recent} other releases by {pr.author} merged automatically in "
+        f"{RATE_WINDOW_TEXT}"],
         eligibility, merge_after)
 
 
