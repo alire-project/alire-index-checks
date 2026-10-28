@@ -205,7 +205,7 @@ class TestDecide(unittest.TestCase):
     def test_cooling_off(self):
         started = NOW - bot.COOLING_OFF + timedelta(minutes=1)
         decision = self.decide(FakeData(started=started))
-        self.assertEqual(decision.action, bot.PENDING)
+        self.assertEqual(decision.action, bot.COOLING)
         self.assertEqual(decision.merge_after, started + bot.COOLING_OFF)
         self.assertEqual(decision.reasons, ["cooling off: 1m left"])
 
@@ -217,7 +217,7 @@ class TestDecide(unittest.TestCase):
         # Left draft, reopened or force-pushed
         changed = NOW - timedelta(minutes=10)
         decision = self.decide(FakeData(changed=changed))
-        self.assertEqual(decision.action, bot.PENDING)
+        self.assertEqual(decision.action, bot.COOLING)
         self.assertEqual(decision.merge_after, changed + bot.COOLING_OFF)
 
     def test_cooled_off_after_change(self):
@@ -228,7 +228,7 @@ class TestDecide(unittest.TestCase):
         # The head was checked long ago (e.g. in a PR to another branch)
         opened = NOW - timedelta(minutes=5)
         decision = self.decide(created_at=opened)
-        self.assertEqual(decision.action, bot.PENDING)
+        self.assertEqual(decision.action, bot.COOLING)
         self.assertEqual(decision.merge_after, opened + bot.COOLING_OFF)
 
     def test_withdrawal_skips_build_and_cooling_off(self):
@@ -440,6 +440,42 @@ class TestEffects(unittest.TestCase):
         gh = FakeGitHub([ghost])
         bot.Bot(gh, "dry-run", self.BOT, 99).apply(pr(), merge)
         self.assertEqual(len(gh.requests), 1)
+
+    def test_dry_run_logs_cooling_after_pending(self):
+        pending = self.decision(bot.PENDING)
+        cooling = self.decision(bot.COOLING)
+        cooling.merge_after = NOW
+        gh = FakeGitHub([comment(self.BOT,
+                                 bot.log_entry(pr(), pending, True))])
+        bot.Bot(gh, "dry-run", self.BOT, 99).apply(pr(), cooling)
+        self.assertEqual(len(gh.requests), 1)
+        self.assertIn("cooling off until 2026-10-28 12:00 UTC",
+                      gh.requests[0][2]["body"])
+
+    def test_on_cooling_replaces_pending_label(self):
+        cooling = self.decision(bot.COOLING)
+        cooling.merge_after = NOW
+        gh = FakeGitHub()
+        bot.Bot(gh, "on", self.BOT, None).apply(
+            pr(labels=[bot.PENDING_LABEL]), cooling)
+        self.assertEqual(gh.requests[:2], [
+            ("DELETE", "/repos/{repo}/issues/7/labels/auto-merge%3A%20pending",
+             None),
+            ("POST", "/repos/{repo}/issues/7/labels",
+             {"labels": [bot.COOLING_LABEL]})])
+        self.assertIn("after 2026-10-28 12:00 UTC", gh.requests[2][2]["body"])
+
+    def test_skip_removes_cooling_label(self):
+        gh = FakeGitHub()
+        bot.Bot(gh, "on", self.BOT, None).apply(
+            pr(labels=[bot.COOLING_LABEL]),
+            bot.Decision(bot.SKIP, ["conflicts with the base branch"]))
+        self.assertEqual([(m, p) for m, p, _ in gh.requests], [
+            ("DELETE",
+             "/repos/{repo}/issues/7/labels/auto-merge%3A%20cooling")])
+
+    def test_one_label_per_decision(self):
+        self.assertEqual(len(set(bot.LABELS.values())), len(bot.LABELS))
 
     def test_dry_run_ignores_comments_by_others(self):
         merge = self.decision(bot.MERGE)
