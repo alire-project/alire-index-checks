@@ -12,7 +12,8 @@ decides, for every open PR to the base branch, whether to:
 
 - skip it for now (drafts, PRs with conflicts or changed during the run);
 - leave it to a manual review, giving the reasons;
-- wait (an eligible PR whose checks are running, or that is cooling off);
+- wait for an eligible PR's checks to complete (pending);
+- wait for an eligible PR to cool off (cooling);
 - merge it.
 
 A PR is merged when it is eligible (automerge.py), no maintainer vetoed it,
@@ -75,6 +76,7 @@ from common import EXTERNAL, MANIFEST_RE
 # merge, during which maintainers can veto it. Withdrawals are merged without
 # waiting.
 COOLING_OFF = timedelta(hours=1)
+COOLING_OFF_TEXT = "one hour"
 
 # Releases that an author may have merged automatically within RATE_WINDOW,
 # as crates.io limits publishing per user. Beyond it, PRs need a manual
@@ -83,17 +85,24 @@ MAX_RELEASES_PER_DAY = 10
 RATE_WINDOW = timedelta(days=1)
 RATE_WINDOW_TEXT = "the last 24 hours"
 
-# Labels. The veto one is set by maintainers, the others by the bot.
+# Labels. The veto one is set by maintainers, the others by the bot, which
+# keeps on each PR the one for its decision (none for skipped PRs).
 VETO_LABEL = "auto-merge: veto"
-PENDING_LABEL = "auto-merge: pending"
+PENDING_LABEL = "auto-merge: pending"  # Waiting for checks
+COOLING_LABEL = "auto-merge: cooling"  # Ready, cooling off
 MANUAL_LABEL = "auto-merge: manual"
 MERGED_LABEL = "auto-merged"
 
 # Decisions
 SKIP = "skip"
 MANUAL = "manual"
-PENDING = "pending"
+PENDING = "pending"  # Eligible, waiting for its checks to complete
+COOLING = "cooling"  # Eligible, checks passed, cooling off
 MERGE = "merge"
+
+# Label of the bot for each decision
+LABELS = {PENDING: PENDING_LABEL, COOLING: COOLING_LABEL,
+          MANUAL: MANUAL_LABEL, MERGE: MERGED_LABEL}
 
 # Check GHA run conclusions that do not block a merge: "success" (passed),
 # "neutral" (finished without a verdict, which only third-party apps report)
@@ -291,7 +300,7 @@ def decide(pr: PullRequest, data: PRData, now: datetime) -> Decision:
                   if time)
     merge_after = started + COOLING_OFF
     if now < merge_after:
-        return Decision(PENDING,
+        return Decision(COOLING,
                         [f"cooling off: {duration(merge_after - now)} left"],
                         eligibility, merge_after)
 
@@ -348,14 +357,15 @@ def describe(decision: Decision) -> str:
 def log_entry(pr: PullRequest, decision: Decision, dry_run: bool) -> str:
     """Return the tracking issue comment for a new decision. The PR is not
     linked nor its author mentioned, so that neither is notified."""
-    would = "would be merged" if dry_run else "merged"
-    headline = {
-        MANUAL: "needs a manual review",
-        PENDING: "is eligible and waiting"
-        + (f" until {decision.merge_after:%Y-%m-%d %H:%M} UTC"
-           if decision.merge_after else ""),
-        MERGE: would,
-    }[decision.action]
+    if decision.action == MANUAL:
+        headline = "needs a manual review"
+    elif decision.action == PENDING:
+        headline = "is eligible and waiting for its checks to complete"
+    elif decision.action == COOLING:
+        headline = ("is eligible and cooling off until "
+                    f"{decision.merge_after:%Y-%m-%d %H:%M} UTC")
+    else:
+        headline = "would be merged" if dry_run else "merged"
     return (f"{marker(pr, decision)}\n"
             f"PR {pr.number} ({neutralize(pr.title)}) by `{pr.author}` "
             f"{headline}.\n\n"
@@ -369,9 +379,10 @@ def pr_comment(pr: PullRequest, decision: Decision) -> str:
                 "reviewed by the index maintainers:")
     elif decision.action == SKIP:
         text = "Automatic merging of this PR is on hold:"
-    elif decision.action == PENDING:
+    elif decision.action in (PENDING, COOLING):
         when = (f"after {decision.merge_after:%Y-%m-%d %H:%M} UTC"
-                if decision.merge_after else "once its checks pass")
+                if decision.action == COOLING
+                else f"{COOLING_OFF_TEXT} after its checks pass")
         text = (f"This PR is eligible for automatic merging, and will be "
                 f"merged {when} unless a maintainer vetoes it (with the "
                 f"`{VETO_LABEL}` label or by requesting changes).")
@@ -613,12 +624,13 @@ class Bot:
             if e.code != 404:
                 raise
 
-    def label(self, pr: PullRequest, wanted: str) -> None:
-        """Leave `wanted` as the only label of the bot on the PR."""
-        for label in (PENDING_LABEL, MANUAL_LABEL, MERGED_LABEL):
+    def label(self, pr: PullRequest, wanted: str | None) -> None:
+        """Leave `wanted` as the only label of the bot on the PR (none, if
+        `wanted` is None)."""
+        for label in LABELS.values():
             if label in pr.labels and label != wanted:
                 self.unlabel(pr, label)
-        if wanted not in pr.labels:
+        if wanted and wanted not in pr.labels:
             self.gh.request("POST",
                             f"/repos/{{repo}}/issues/{pr.number}/labels",
                             {"labels": [wanted]})
@@ -658,16 +670,12 @@ class Bot:
 
         if decision.action == SKIP:
             # Withdraw an earlier promise to merge
-            if PENDING_LABEL in pr.labels:
-                self.unlabel(pr, PENDING_LABEL)
+            if {PENDING_LABEL, COOLING_LABEL} & set(pr.labels):
+                self.label(pr, None)
                 self.comment(pr, pr_comment(pr, decision), only_update=True)
             return
 
-        if decision.action == MERGE:
-            self.label(pr, MERGED_LABEL)
-        else:
-            self.label(pr, PENDING_LABEL if decision.action == PENDING
-                       else MANUAL_LABEL)
+        self.label(pr, LABELS[decision.action])
         self.comment(pr, pr_comment(pr, decision))
 
 
