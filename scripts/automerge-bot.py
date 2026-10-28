@@ -677,15 +677,19 @@ def process(prs: list[dict[str, Any]],
                 # Recorded before anything else can fail: the rate limit must
                 # count it, and later PRs must be evaluated against the base
                 # including it (e.g. to notice a duplicate), or not at all in
-                # this run
+                # this run. Labelling it first makes later runs count it too.
                 if decision.eligibility.kind == RELEASES:
                     merged_in_run[pr.author] = (
                         merged_in_run.get(pr.author, 0)
                         + len(decision.eligibility.releases))
                 stale_base = True
-                fetch_base()
-                stale_base = False
-            bot.apply(pr, decision)
+                try:
+                    bot.apply(pr, decision)
+                finally:
+                    fetch_base()
+                    stale_base = False
+            else:
+                bot.apply(pr, decision)
             rows.append((number, author, decision.action,
                          "; ".join(decision.reasons)))
         except WrongIdentity:

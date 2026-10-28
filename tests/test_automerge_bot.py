@@ -537,6 +537,26 @@ class TestProcess(unittest.TestCase):
                          ["error", "not processed"])
         self.assertEqual(errors, 1)
         self.assertEqual(len(self.merges()), 1)
+        # The merged PR was still labelled, so later runs count it
+        self.assertIn(("POST", "/repos/{repo}/issues/1/labels",
+                       {"labels": [bot.MERGED_LABEL]}), self.gh.requests)
+
+    def test_base_fetched_even_if_labelling_fails(self):
+        fetches = []
+
+        class FailingGitHub(FakeGitHub):
+            def request(self, method, path, body=None, params=None):
+                if path.endswith("/labels"):
+                    raise OSError("labels")
+                return super().request(method, path, body, params)
+
+        runner = bot.Bot(FailingGitHub(), "on", TestEffects.BOT, None)
+        rows, errors = bot.process(
+            [pr_listing(1), pr_listing(2)],
+            lambda pr, merged: CountingData(merged), runner,
+            lambda: fetches.append(1), NOW)
+        self.assertEqual(len(fetches), 2)
+        self.assertEqual([row[2] for row in rows], ["error", "error"])
 
     def test_rate_limit_counts_merges_of_the_run(self):
         rows, _ = self.run_prs(

@@ -160,12 +160,31 @@ def release_reasons(path: str, crate: str, version: str,
                                     old_version)
 
 
+def added_twice_reasons(crate: str, version: str,
+                        added: dict[str, list[tuple[Version, str]]]
+                        ) -> list[str]:
+    """Return the reason why `version` of `crate` duplicates another release
+    added by the same PR, if so, recording it in `added`. Releases in the
+    base branch are checked by release_reasons."""
+    try:
+        parsed = Version.parse(version)
+    except ValueError:
+        return []  # Reported by release_reasons
+    reasons = [f"{crate}: version {version} has the same precedence as "
+               f"{other}, also added by the PR"
+               for other_parsed, other in added.get(crate, [])
+               if other_parsed == parsed]
+    added.setdefault(crate, []).append((parsed, version))
+    return reasons
+
+
 def evaluate(author: str) -> Eligibility:
     """Decide whether the PR, opened by `author`, may be merged
     automatically."""
     releases = []
     reasons = []
     kinds = set()
+    added: dict[str, list[tuple[Version, str]]] = {}  # By crate
 
     changes = changed_files()
     if not changes:
@@ -188,6 +207,7 @@ def evaluate(author: str) -> Eligibility:
             if status == "A":
                 kinds.add(RELEASES)
                 reasons += release_reasons(path, crate, version, author)
+                reasons += added_twice_reasons(crate, version, added)
             elif status == "M" and is_withdrawal(path):
                 kinds.add(WITHDRAWALS)
                 reasons += maintainer_reasons(
