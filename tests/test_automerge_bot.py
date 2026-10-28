@@ -321,6 +321,8 @@ class FakeGitHub:
 
     def request(self, method, path, body=None, params=None):
         self.requests.append((method, path, body))
+        # Comments come back as posted by the bot
+        return {"user": {"login": TestEffects.BOT}}
 
 
 def comment(login, body, id=1):
@@ -374,6 +376,19 @@ class TestEffects(unittest.TestCase):
         self.assertEqual([(m, p) for m, p, _ in gh.requests],
                          [("POST", "/repos/{repo}/issues/99/comments")] * 2)
         self.assertIn("would be merged", gh.requests[1][2]["body"])
+
+    def test_wrong_identity_stops(self):
+        gh = FakeGitHub()
+        runner = bot.Bot(gh, "dry-run", "other[bot]", 99)
+        with self.assertRaises(bot.WrongIdentity):
+            runner.apply(pr(), self.decision(bot.MANUAL))
+        self.assertEqual(len(gh.requests), 1)
+
+    def test_pr_by_deleted_account(self):
+        data = {"number": 3, "title": "t", "user": None,
+                "head": {"sha": "abc"}, "draft": False, "labels": [],
+                "created_at": "2026-10-28T10:00:00Z"}
+        self.assertEqual(bot.pull_request(data).author, bot.DELETED_AUTHOR)
 
     def test_deleted_accounts_are_nobody(self):
         merge = self.decision(bot.MERGE)
@@ -465,6 +480,98 @@ class TestLiveChecks(unittest.TestCase):
 
     def test_suites_of_other_apps_are_ignored(self):
         self.assertEqual(len(self.checks(suite("queued", None, "other"))), 1)
+
+
+def pr_listing(number, author="bob"):
+    return {"number": number, "title": f"PR {number}",
+            "user": {"login": author}, "head": {"sha": f"sha{number}"},
+            "draft": False, "labels": [],
+            "created_at": "2026-10-27T10:00:00Z"}
+
+
+class CountingData(FakeData):
+    """FakeData whose rate limit counts the merges of the run."""
+
+    def __init__(self, merged_in_run, releases=1):
+        super().__init__(
+            result=eligible(*[(f"c{i}", "1.0.0") for i in range(releases)]),
+            annotations=[f"built c{i}=1.0.0" for i in range(releases)])
+        self.merged_in_run = merged_in_run
+
+    def recent_releases(self, author, since):
+        return self.merged_in_run.get(author, 0)
+
+
+class TestProcess(unittest.TestCase):
+
+    def run_prs(self, prs, pr_data=None, mode="on", fetch=lambda: None,
+                login=TestEffects.BOT):
+        self.gh = FakeGitHub()
+        runner = bot.Bot(self.gh, mode, login, 99)
+        return bot.process(
+            prs, pr_data or (lambda pr, merged: CountingData(merged)),
+            runner, fetch, NOW)
+
+    def merges(self):
+        return [path for method, path, _ in self.gh.requests
+                if method == "PUT"]
+
+    def test_merges_all(self):
+        rows, errors = self.run_prs([pr_listing(1), pr_listing(2)])
+        self.assertEqual([row[2] for row in rows], [bot.MERGE, bot.MERGE])
+        self.assertEqual(errors, 0)
+        self.assertEqual(len(self.merges()), 2)
+
+    def test_base_fetched_after_each_merge(self):
+        fetches = []
+        self.run_prs([pr_listing(1), pr_listing(2)],
+                     fetch=lambda: fetches.append(1))
+        self.assertEqual(len(fetches), 2)
+
+    def test_stops_when_base_cannot_be_fetched(self):
+        def fail():
+            raise OSError("network")
+        rows, errors = self.run_prs([pr_listing(1), pr_listing(2)],
+                                    fetch=fail)
+        self.assertEqual([row[2] for row in rows],
+                         ["error", "not processed"])
+        self.assertEqual(errors, 1)
+        self.assertEqual(len(self.merges()), 1)
+
+    def test_rate_limit_counts_merges_of_the_run(self):
+        rows, _ = self.run_prs(
+            [pr_listing(1), pr_listing(2), pr_listing(3, author="carol")],
+            pr_data=lambda pr, merged: CountingData(merged, releases=6))
+        self.assertEqual([row[2] for row in rows],
+                         [bot.MERGE, bot.MANUAL, bot.MERGE])
+
+    def test_errors_are_isolated(self):
+        def pr_data(pr, merged):
+            if pr.number == 1:
+                raise KeyError("odd response")
+            return CountingData(merged)
+        rows, errors = self.run_prs([pr_listing(1), pr_listing(2)], pr_data)
+        self.assertEqual([row[2] for row in rows], ["error", bot.MERGE])
+        self.assertEqual(errors, 1)
+        self.assertEqual(self.merges(), ["/repos/{repo}/pulls/2/merge"])
+
+    def test_wrong_identity_stops_the_run(self):
+        with self.assertRaises(bot.WrongIdentity):
+            self.run_prs([pr_listing(1), pr_listing(2)], login="other[bot]")
+        self.assertEqual(len(self.merges()), 1)
+
+    def test_dry_run_never_merges(self):
+        rows, _ = self.run_prs([pr_listing(1)], mode="dry-run")
+        self.assertEqual(rows[0][2], bot.MERGE)
+        self.assertEqual(self.merges(), [])
+
+    def test_pr_by_deleted_account_is_not_merged(self):
+        listing = pr_listing(1)
+        listing["user"] = None
+        rows, errors = self.run_prs(
+            [listing], pr_data=lambda pr, merged: FakeData(result=Eligibility(
+                False, None, [], [f"not a maintainer: {pr.author}"])))
+        self.assertEqual(rows[0][1:3], (bot.DELETED_AUTHOR, bot.MANUAL))
 
 
 if __name__ == "__main__":

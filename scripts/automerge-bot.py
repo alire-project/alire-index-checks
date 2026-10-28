@@ -64,7 +64,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from automerge import RELEASES, Eligibility, evaluate
 from common import EXTERNAL, MANIFEST_RE
@@ -537,6 +537,11 @@ class LivePRData:
 # --- Effects
 
 
+class WrongIdentity(Exception):
+    """The bot posts as another account than --bot-login, so it would not
+    recognize its own comments, and would post them again on every run."""
+
+
 class Bot:
     def __init__(self, gh: GitHub, mode: str, bot_login: str,
                  issue: int | None):
@@ -548,12 +553,19 @@ class Bot:
             f"/repos/{{repo}}/issues/{issue}/comments"), bot_login)
             if mode == "dry-run" else {})
 
+    def post(self, method: str, path: str, body: str) -> None:
+        """Post or edit a comment, checking that it is the bot's own."""
+        comment = self.gh.request(method, path, {"body": body})
+        if login(comment) != self.bot_login:
+            raise WrongIdentity(f"comments are posted as {login(comment)}, "
+                                f"not as {self.bot_login} (--bot-login)")
+
     def log(self, pr: PullRequest, decision: Decision) -> None:
         """Log a new decision in the tracking issue (dry-run mode)."""
         if self.logged.get(pr.number) == (pr.head_sha, decision.action):
             return
-        self.gh.request("POST", f"/repos/{{repo}}/issues/{self.issue}/comments",
-                        {"body": log_entry(pr, decision, dry_run=True)})
+        self.post("POST", f"/repos/{{repo}}/issues/{self.issue}/comments",
+                  log_entry(pr, decision, dry_run=True))
 
     def label(self, pr: PullRequest, wanted: str) -> None:
         """Leave `wanted` as the only label of the bot on the PR."""
@@ -576,15 +588,14 @@ class Bot:
             if (login(comment) == self.bot_login
                     and MARKER_RE.search(comment["body"])):
                 if comment["body"] != body:
-                    self.gh.request(
+                    self.post(
                         "PATCH",
                         f"/repos/{{repo}}/issues/comments/{comment['id']}",
-                        {"body": body})
+                        body)
                 return
         if not only_update:
-            self.gh.request("POST",
-                            f"/repos/{{repo}}/issues/{pr.number}/comments",
-                            {"body": body})
+            self.post("POST", f"/repos/{{repo}}/issues/{pr.number}/comments",
+                      body)
 
     def merge(self, pr: PullRequest) -> None:
         """Merge the evaluated head of a PR: GitHub refuses it if the PR
@@ -618,21 +629,75 @@ class Bot:
         self.comment(pr, pr_comment(pr, decision))
 
 
+# Author of PRs by deleted accounts, which maintain no crate
+DELETED_AUTHOR = "(deleted)"
+
+
 def pull_request(data: dict[str, Any]) -> PullRequest:
     return PullRequest(number=data["number"], title=data["title"],
-                       author=data["user"]["login"],
+                       author=login(data) or DELETED_AUTHOR,
                        head_sha=data["head"]["sha"], draft=data["draft"],
                        labels=[label["name"] for label in data["labels"]],
                        created_at=datetime.fromisoformat(data["created_at"]))
 
 
-def summary(rows: list[tuple[PullRequest, str, str]], mode: str) -> str:
+def summary(rows: list[tuple[int, str, str, str]], mode: str) -> str:
+    """Return a Markdown table of (PR number, author, decision, reasons)."""
     lines = [f"## Auto-merge ({mode})", "",
              "| PR | Author | Decision | Reasons |", "|---|---|---|---|"]
-    for pr, action, reasons in rows:
-        lines.append(f"| {pr.number} | `{pr.author}` | {action} | "
+    for number, author, action, reasons in rows:
+        lines.append(f"| {number} | `{author}` | {action} | "
                      f"{neutralize(reasons).replace('|', '/')} |")
     return "\n".join(lines) + "\n"
+
+
+def process(prs: list[dict[str, Any]],
+            pr_data: Callable[[PullRequest, dict[str, int]], PRData],
+            bot: Bot, fetch_base: Callable[[], None],
+            now: datetime) -> tuple[list[tuple[int, str, str, str]], int]:
+    """Decide and act on every PR (as listed by the API), oldest first.
+    Return the rows of the summary and the number of errors."""
+    rows = []
+    errors = 0
+    merged_in_run: dict[str, int] = {}
+    stale_base = False
+    for data in prs:
+        number = data["number"]
+        author = login(data) or DELETED_AUTHOR
+        if stale_base:
+            rows.append((number, author, "not processed",
+                         "the base branch could not be fetched after a "
+                         "merge"))
+            continue
+        try:
+            pr = pull_request(data)
+            decision = decide(pr, pr_data(pr, merged_in_run), now)
+            if decision.action == MERGE and bot.mode == "on":
+                bot.merge(pr)
+                # Recorded before anything else can fail: the rate limit must
+                # count it, and later PRs must be evaluated against the base
+                # including it (e.g. to notice a duplicate), or not at all in
+                # this run
+                if decision.eligibility.kind == RELEASES:
+                    merged_in_run[pr.author] = (
+                        merged_in_run.get(pr.author, 0)
+                        + len(decision.eligibility.releases))
+                stale_base = True
+                fetch_base()
+                stale_base = False
+            bot.apply(pr, decision)
+            rows.append((number, author, decision.action,
+                         "; ".join(decision.reasons)))
+        except WrongIdentity:
+            raise  # Every comment would be posted again on every run
+        except Exception as e:
+            # Any failure leaves the PR alone (unmerged, unless it was merged
+            # just before) and the others are still processed
+            traceback.print_exc()
+            errors += 1
+            rows.append((number, author, "error",
+                         f"{type(e).__name__}: {e}"))
+    return rows, errors
 
 
 def main() -> int:
@@ -650,8 +715,6 @@ def main() -> int:
     bot = Bot(gh, args.mode, args.bot_login, args.issue)
     now = datetime.now(timezone.utc)
 
-    rows = []
-    errors = 0
     with tempfile.TemporaryDirectory() as git_dir:
         def fetch_base() -> None:
             # Without file contents, which git fetches when needed
@@ -663,34 +726,13 @@ def main() -> int:
             f"https://github.com/{args.repo}.git")
         fetch_base()
 
-        merged_in_run: dict[str, int] = {}
-        # Oldest first
-        for data in gh.get_all("/repos/{repo}/pulls",
-                               {"state": "open", "base": args.base,
-                                "sort": "created", "direction": "asc"}):
-            pr = pull_request(data)
-            try:
-                decision = decide(
-                    pr, LivePRData(gh, git_dir, pr, merged_in_run), now)
-                if decision.action == MERGE and args.mode == "on":
-                    bot.merge(pr)
-                    # Recorded before anything else can fail: the rate limit
-                    # must count it, and later PRs must be evaluated against
-                    # the base including it (e.g. to notice a duplicate)
-                    if decision.eligibility.kind == RELEASES:
-                        merged_in_run[pr.author] = (
-                            merged_in_run.get(pr.author, 0)
-                            + len(decision.eligibility.releases))
-                    fetch_base()
-                bot.apply(pr, decision)
-                rows.append((pr, decision.action,
-                             "; ".join(decision.reasons)))
-            except Exception as e:
-                # Any failure leaves the PR alone (unmerged, unless it was
-                # merged just before) and the others are still processed
-                traceback.print_exc()
-                errors += 1
-                rows.append((pr, "error", f"{type(e).__name__}: {e}"))
+        rows, errors = process(
+            gh.get_all("/repos/{repo}/pulls",
+                       {"state": "open", "base": args.base,
+                        "sort": "created", "direction": "asc"}),
+            lambda pr, merged_in_run: LivePRData(gh, git_dir, pr,
+                                                 merged_in_run),
+            bot, fetch_base, now)
 
     text = summary(rows, args.mode)
     print(text)
