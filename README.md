@@ -79,6 +79,8 @@ Not mirrored:
   platforms.
 - `check-with-script.yml`, a reusable workflow used by the checks.
 - `cleaner.yml`, which closes stale PRs.
+- `auto-merge.yml`, which runs the auto-merge bot on a schedule (see
+  "Auto-merge eligibility" above), and is not a check on PRs.
 
 Other workflows here are not mirrors:
 
