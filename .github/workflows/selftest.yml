@@ -43,6 +43,18 @@ jobs:
       run: tests/test-check-crate-name.sh
       shell: bash
 
+  check-website:
+    name: "Self-test: check-website" # Unique, as a required check name
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out
+      uses: actions/checkout@v4
+
+    - name: Test website check
+      run: tests/test-check-website.sh
+      shell: bash
+
   check-changes:
     name: "Self-test: check-changes" # Unique, as a required check name
     runs-on: ubuntu-latest

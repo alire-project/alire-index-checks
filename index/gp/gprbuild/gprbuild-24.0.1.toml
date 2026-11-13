@@ -1,6 +1,7 @@
 name = "gprbuild"
 version = "24.0.1"
 description = "The GPRBuild Ada/multilanguage build tool"
+website = "https://docs.adacore.com/gprbuild-docs/html/gprbuild_ug.html"
 maintainers = ["chouteau@adacore.com"]
 maintainers-logins = ["Fabien-Chouteau"]
 

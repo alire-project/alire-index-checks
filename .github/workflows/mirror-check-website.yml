@@ -1,0 +1,30 @@
+name: "Mirror: Check Website"
+# Mirror of alire-index/.github/workflows/check-website.yml (see "Mirror workflows" in README.md)
+# Require a website in new releases
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CHECKS_REPO: .
+
+jobs:
+
+  check:
+    name: "Mirror: Website" # Unique, as a required check name
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Check website
+      run: '"$CHECKS_REPO/scripts/check-website.py"'
+      shell: bash
+      env:
+        ALL_CRATES: TRUE

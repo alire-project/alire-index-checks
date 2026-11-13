@@ -70,6 +70,7 @@ Mirrors are named after their sibling in alire-index:
 | `check-crate-name.yml` (Check Crate Name) | `mirror-check-crate-name.yml` |
 | `check-index.yml` (Check Index) | `mirror-check-index.yml` |
 | `check-schema.yml` (Check Schema) | `mirror-check-schema.yml` |
+| `check-website.yml` (Check Website) | `mirror-check-website.yml` |
 | `diff-release.yml` (Diff release) | `mirror-diff-release.yml` |
 
 Not mirrored:
@@ -84,8 +85,6 @@ Not mirrored:
 
 Other workflows here are not mirrors:
 
-- `website.yml` runs `check-website.sh`, which alire-index does not use yet.
-  Rename it as a mirror when it is.
 - `selftest.yml` (`Self-test`) runs the offline tests in `tests/`, which
   exercise the scripts on crafted throwaway repositories. They complement
   mirrors, they do not replace them.
