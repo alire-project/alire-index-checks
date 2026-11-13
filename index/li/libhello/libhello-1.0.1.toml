@@ -1,4 +1,5 @@
 description = "\"Hello, world!\" demonstration project support library"
+website = "https://github.com/alire-project/libhello"
 name = "libhello"
 version = "1.0.1"
 
