@@ -5,7 +5,7 @@ Merge eligible PRs to an Alire index automatically, as described in AEP-6
 
 Usage:
     automerge-bot.py --repo OWNER/NAME --base BRANCH --mode dry-run|on
-                     --bot-login LOGIN [--issue NUMBER]
+                     --bot-login LOGIN [--log-period year|month|week|day]
 
 Meant to run periodically (see auto-merge.yml in alire-index). Each run
 decides, for every open PR to the base branch, whether to:
@@ -28,26 +28,26 @@ manifests are parsed. Check results can be trusted because eligible PRs only
 touch manifests, so they run the base workflows.
 
 Modes:
-    dry-run  Decide and report, without touching any PR. Changes in decisions
-             are logged as comments in the tracking issue given by --issue.
-             As nothing is merged, the rate limit always counts zero
-             previous releases.
+    dry-run  Decide and log, without touching any PR. As nothing is merged,
+             the rate limit always counts zero previous releases.
     on       Also label and comment on PRs, and merge them. PRs skipped after
              having been found eligible lose their pending label.
 
-In both modes, a table of decisions is written to $GITHUB_STEP_SUMMARY when
-set, and to the standard output.
+In both modes, changes in decisions are logged as comments in a log issue,
+marked as "Dry run" or "Live" entries. There is one log issue per period
+(--log-period, a year by default), which the bot creates, pins, and closes
+when the next period starts. A table of decisions is also written to
+$GITHUB_STEP_SUMMARY when set, and to the standard output.
 
 Environment:
     GH_TOKEN  Token for the GitHub API (read access to the repository; write
-              access to issues in dry-run mode, and to pull requests and
-              contents in on mode)
+              access to issues, and to pull requests and contents in on mode)
 
 Exit status:
     0  every PR was processed
     1  some PR could not be processed, or the run stopped early (when the
-       base branch cannot be fetched after a merge, or comments are not posted
-       as --bot-login); see the summary and the log
+       base branch cannot be fetched after a merge, or comments or issues
+       are not posted as --bot-login); see the summary and the log
     2  usage error
 
 Dependencies: tomllib (Python >= 3.11), semver (in requirements.txt)
@@ -118,10 +118,16 @@ MAINTAINERS = {"OWNER", "MEMBER", "COLLABORATOR"}
 BUILD_ANNOTATION = "alire-build"
 BUILD_SUCCESSES = {"built", "fetched"}
 
-# Hidden marker in the bot's comments, identifying the PR and decision
+# Hidden marker in the bot's comments, identifying the PR and decision, and
+# in log entries also the mode
 MARKER_RE = re.compile(
     r"<!-- automerge pr=(?P<pr>\d+) sha=(?P<sha>\w+) action=(?P<action>\w+)"
-    r" -->")
+    r"(?: mode=(?P<mode>[\w-]+))? -->")
+
+# Log issues, one per period, titled LOG_TITLE and the period
+LOG_TITLE = "Auto-merge log"
+PERIODS = {"year": "%Y", "month": "%Y-%m", "week": "%G-W%V",
+           "day": "%Y-%m-%d"}
 
 API = "https://api.github.com"
 
@@ -337,9 +343,11 @@ def neutralize(text: str) -> str:
     return text
 
 
-def marker(pr: PullRequest, decision: Decision) -> str:
+def marker(pr: PullRequest, decision: Decision,
+           mode: str | None = None) -> str:
+    in_mode = f" mode={mode}" if mode else ""
     return (f"<!-- automerge pr={pr.number} sha={pr.head_sha} "
-            f"action={decision.action} -->")
+            f"action={decision.action}{in_mode} -->")
 
 
 def describe(decision: Decision) -> str:
@@ -354,9 +362,10 @@ def describe(decision: Decision) -> str:
     return "\n".join(lines)
 
 
-def log_entry(pr: PullRequest, decision: Decision, dry_run: bool) -> str:
-    """Return the tracking issue comment for a new decision. The PR is not
-    linked nor its author mentioned, so that neither is notified."""
+def log_entry(pr: PullRequest, decision: Decision, mode: str) -> str:
+    """Return the log issue comment for a new decision, which says whether
+    it had any effect. The PR is not linked nor its author mentioned, so that
+    neither is notified."""
     if decision.action == MANUAL:
         headline = "needs a manual review"
     elif decision.action == PENDING:
@@ -365,10 +374,18 @@ def log_entry(pr: PullRequest, decision: Decision, dry_run: bool) -> str:
         headline = ("is eligible and cooling off until "
                     f"{decision.merge_after:%Y-%m-%d %H:%M} UTC")
     else:
-        headline = "would be merged" if dry_run else "merged"
-    return (f"{marker(pr, decision)}\n"
-            f"PR {pr.number} ({neutralize(pr.title)}) by `{pr.author}` "
-            f"{headline}.\n\n"
+        headline = "was merged" if mode == "on" else "would be merged"
+
+    if mode == "on":
+        prefix = "**Live**"
+        if decision.action != MERGE:
+            headline += (f"; labeled `{LABELS[decision.action]}` and "
+                         "commented")
+    else:
+        prefix = "**Dry run**, nothing done"
+    return (f"{marker(pr, decision, mode)}\n"
+            f"{prefix}: PR {pr.number} ({neutralize(pr.title)}) by "
+            f"`{pr.author}` {headline}.\n\n"
             f"{describe(decision)}\n")
 
 
@@ -398,18 +415,42 @@ def login(item: dict[str, Any]) -> str | None:
 
 
 def previous_decisions(comments: list[dict[str, Any]],
-                       bot_login: str) -> dict[int, tuple[str, str]]:
-    """Return {PR number: (head SHA, action)} of the latest decision logged
-    by the bot in `comments`. Comments by anyone else are ignored, so that
-    they cannot suppress or fake entries."""
+                       bot_login: str) -> dict[int, tuple[str, str, str]]:
+    """Return {PR number: (head SHA, action, mode)} of the latest decision
+    logged by the bot in `comments`. Comments by anyone else are ignored, so
+    that they cannot suppress or fake entries."""
     decisions = {}
     for comment in comments:
         if login(comment) != bot_login:
             continue
         match = MARKER_RE.search(comment["body"])
         if match:
-            decisions[int(match["pr"])] = (match["sha"], match["action"])
+            decisions[int(match["pr"])] = (match["sha"], match["action"],
+                                           match["mode"])
     return decisions
+
+
+def log_title(period: str, now: datetime) -> str:
+    """Return the title of the log issue for the `period` including `now`,
+    e.g. "Auto-merge log 2026" or "Auto-merge log 2026-W46"."""
+    return f"{LOG_TITLE} {now.strftime(PERIODS[period])}"
+
+
+def log_body(previous: list[int]) -> str:
+    """Return the description of a new log issue."""
+    text = ("Decisions of the auto-merge bot of this index (AEP-6), logged "
+            "each time the decision for a PR changes:\n\n"
+            "- **Live** entries took effect: the PR was labeled and "
+            "commented, or merged.\n"
+            "- **Dry run** entries had no effect: they say what the bot would "
+            "have done.\n\n"
+            "PRs are not linked, so that they and their authors are not "
+            "notified. The mode is switched with `scripts/automerge-mode.sh` "
+            "in alire-index-checks.\n")
+    if previous:
+        text += ("\nPrevious log: "
+                 + ", ".join(f"#{number}" for number in previous) + "\n")
+    return text
 
 
 # --- GitHub
@@ -450,6 +491,15 @@ class GitHub:
             raise HTTPError(e.code, f"{method} {path}: {e.code} "
                             f"{e.read().decode(errors='replace')}") from e
         return json.loads(data) if data else None
+
+    def graphql(self, query: str, **variables: Any) -> Any:
+        """Run a GraphQL query or mutation, which GitHub answers with errors
+        instead of an HTTP error status."""
+        data = self.request("POST", "/graphql",
+                            {"query": query, "variables": variables})
+        if data.get("errors"):
+            raise OSError(f"GraphQL: {data['errors']}")
+        return data["data"]
 
     def get_all(self, path: str, params: dict[str, Any] | None = None,
                 key: str | None = None) -> list[Any]:
@@ -590,16 +640,58 @@ class WrongIdentity(Exception):
     recognize its own comments, and would post them again on every run."""
 
 
+# Log issue pinning, only available through GraphQL
+PIN = ("mutation($id: ID!) { pinIssue(input: {issueId: $id}) "
+       "{ clientMutationId } }")
+UNPIN = ("mutation($id: ID!) { unpinIssue(input: {issueId: $id}) "
+         "{ clientMutationId } }")
+
+
+def open_log(gh: GitHub, bot_login: str, title: str) -> int:
+    """Return the number of the open log issue with `title` created by the
+    bot. When there is none, create it, pin it, and close the bot's previous
+    log issues. Issues by anyone else are ignored, so that they cannot
+    capture the log. Pinning is not essential, so its failures are only
+    reported."""
+    logs = [issue for issue in gh.get_all("/repos/{repo}/issues",
+                                          {"state": "open"})
+            if "pull_request" not in issue and login(issue) == bot_login
+            and issue["title"].startswith(LOG_TITLE + " ")]
+    current = [issue["number"] for issue in logs if issue["title"] == title]
+    if current:
+        return min(current)
+
+    previous = sorted(issue["number"] for issue in logs)
+    issue = gh.request("POST", "/repos/{repo}/issues",
+                       {"title": title, "body": log_body(previous)})
+    if login(issue) != bot_login:
+        raise WrongIdentity(f"issues are created as {login(issue)}, not as "
+                            f"{bot_login} (--bot-login)")
+
+    for old in logs:
+        gh.request("POST", f"/repos/{{repo}}/issues/{old['number']}/comments",
+                   {"body": f"Continued in #{issue['number']}."})
+        gh.request("PATCH", f"/repos/{{repo}}/issues/{old['number']}",
+                   {"state": "closed", "state_reason": "completed"})
+    # Unpinned first, as few issues may be pinned at once
+    for mutation, pinned in [(UNPIN, old) for old in logs] + [(PIN, issue)]:
+        try:
+            gh.graphql(mutation, id=pinned["node_id"])
+        except OSError as e:
+            print(f"WARNING: could not pin or unpin #{pinned['number']}: {e}",
+                  file=sys.stderr)
+    return issue["number"]
+
+
 class Bot:
-    def __init__(self, gh: GitHub, mode: str, bot_login: str,
-                 issue: int | None):
+    def __init__(self, gh: GitHub, mode: str, bot_login: str, issue: int):
         self.gh = gh
         self.mode = mode
         self.bot_login = bot_login
         self.issue = issue
-        self.logged = (previous_decisions(self.gh.get_all(
+        """The log issue"""
+        self.logged = previous_decisions(self.gh.get_all(
             f"/repos/{{repo}}/issues/{issue}/comments"), bot_login)
-            if mode == "dry-run" else {})
 
     def post(self, method: str, path: str, body: str) -> None:
         """Post or edit a comment, checking that it is the bot's own."""
@@ -609,11 +701,12 @@ class Bot:
                                 f"not as {self.bot_login} (--bot-login)")
 
     def log(self, pr: PullRequest, decision: Decision) -> None:
-        """Log a new decision in the tracking issue (dry-run mode)."""
-        if self.logged.get(pr.number) == (pr.head_sha, decision.action):
+        """Log a new decision, or the same one in another mode."""
+        if (self.logged.get(pr.number)
+                == (pr.head_sha, decision.action, self.mode)):
             return
         self.post("POST", f"/repos/{{repo}}/issues/{self.issue}/comments",
-                  log_entry(pr, decision, dry_run=True))
+                  log_entry(pr, decision, self.mode))
 
     def unlabel(self, pr: PullRequest, label: str) -> None:
         """Remove a label, unless someone did it after the PR was listed."""
@@ -661,22 +754,20 @@ class Bot:
                         {"merge_method": "squash", "sha": pr.head_sha})
 
     def apply(self, pr: PullRequest, decision: Decision) -> None:
-        """Label and comment according to a decision (on mode), or log it
-        (dry-run mode)."""
-        if self.mode == "dry-run":
-            if decision.action != SKIP:
-                self.log(pr, decision)
-            return
-
+        """Label and comment according to a decision (on mode), and log it
+        (both modes, except skips)."""
         if decision.action == SKIP:
             # Withdraw an earlier promise to merge
-            if {PENDING_LABEL, COOLING_LABEL} & set(pr.labels):
+            if (self.mode == "on"
+                    and {PENDING_LABEL, COOLING_LABEL} & set(pr.labels)):
                 self.label(pr, None)
                 self.comment(pr, pr_comment(pr, decision), only_update=True)
             return
 
-        self.label(pr, LABELS[decision.action])
-        self.comment(pr, pr_comment(pr, decision))
+        if self.mode == "on":
+            self.label(pr, LABELS[decision.action])
+            self.comment(pr, pr_comment(pr, decision))
+        self.log(pr, decision)
 
 
 # Author of PRs by deleted accounts, which maintain no crate
@@ -776,14 +867,13 @@ def main() -> int:
     parser.add_argument("--base", required=True)
     parser.add_argument("--mode", required=True, choices=["dry-run", "on"])
     parser.add_argument("--bot-login", required=True)
-    parser.add_argument("--issue", type=int)
+    parser.add_argument("--log-period", choices=PERIODS, default="year")
     args = parser.parse_args()
-    if args.mode == "dry-run" and args.issue is None:
-        parser.error("--issue is required in dry-run mode")
 
     gh = GitHub(args.repo, os.environ["GH_TOKEN"])
-    bot = Bot(gh, args.mode, args.bot_login, args.issue)
     now = datetime.now(timezone.utc)
+    issue = open_log(gh, args.bot_login, log_title(args.log_period, now))
+    bot = Bot(gh, args.mode, args.bot_login, issue)
 
     with tempfile.TemporaryDirectory() as git_dir:
         def fetch_base() -> None:
