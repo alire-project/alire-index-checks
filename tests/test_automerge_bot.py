@@ -282,19 +282,19 @@ class TestParsing(unittest.TestCase):
             return {"user": {"login": login}, "body": body}
         comments = [
             comment("bot[bot]", "<!-- automerge pr=1 sha=aaa action=pending"
-                    " -->\ntext"),
+                    " mode=dry-run -->\ntext"),
             comment("bot[bot]", "<!-- automerge pr=1 sha=aaa action=merge"
-                    " -->"),
+                    " mode=on -->"),
             comment("mallory", "<!-- automerge pr=2 sha=bbb action=merge"
-                    " -->"),
+                    " mode=on -->"),
             comment("bot[bot]", "unrelated")]
         self.assertEqual(bot.previous_decisions(comments, "bot[bot]"),
-                         {1: ("aaa", "merge")})
+                         {1: ("aaa", "merge", "on")})
 
     def test_log_entry_does_not_notify(self):
         decision = bot.Decision(bot.MANUAL, ["reason"],
                                 eligible(("hello", "2.1.0")))
-        entry = bot.log_entry(pr(), decision, dry_run=True)
+        entry = bot.log_entry(pr(), decision, "dry-run")
         self.assertNotIn("@", entry)
         self.assertNotIn("#7", entry)
         self.assertTrue(bot.MARKER_RE.search(entry))
@@ -302,7 +302,7 @@ class TestParsing(unittest.TestCase):
     def test_pr_text_is_neutralized(self):
         title = "hi @mosteo, see #1 <!-- automerge pr=1 sha=a action=merge -->"
         decision = bot.Decision(bot.MANUAL, ["evil/@x.md: not a manifest"])
-        entry = bot.log_entry(pr(title=title), decision, dry_run=True)
+        entry = bot.log_entry(pr(title=title), decision, "dry-run")
         self.assertNotIn("@", entry)
         self.assertNotIn("#1", entry)
         self.assertEqual(len(bot.MARKER_RE.findall(entry)), 1)
@@ -351,6 +351,7 @@ def comment(login, body, id=1):
 class TestEffects(unittest.TestCase):
 
     BOT = "bot[bot]"
+    LOG = "/repos/{repo}/issues/99/comments"
 
     def decision(self, action, *reasons):
         return bot.Decision(action, list(reasons),
@@ -358,7 +359,7 @@ class TestEffects(unittest.TestCase):
 
     def test_skip_does_nothing(self):
         gh = FakeGitHub()
-        bot.Bot(gh, "on", self.BOT, None).apply(pr(), bot.Decision(
+        bot.Bot(gh, "on", self.BOT, 99).apply(pr(), bot.Decision(
             bot.SKIP, ["draft"]))
         self.assertEqual(gh.requests, [])
 
@@ -367,7 +368,7 @@ class TestEffects(unittest.TestCase):
             bot.PENDING)), id=5)
         gh = FakeGitHub([pending])
         skip = bot.Decision(bot.SKIP, ["conflicts with the base branch"])
-        bot.Bot(gh, "on", self.BOT, None).apply(
+        bot.Bot(gh, "on", self.BOT, 99).apply(
             pr(labels=[bot.PENDING_LABEL]), skip)
         self.assertEqual([(m, p) for m, p, _ in gh.requests], [
             ("DELETE", "/repos/{repo}/issues/7/labels/auto-merge%3A%20pending"),
@@ -382,7 +383,7 @@ class TestEffects(unittest.TestCase):
                 return super().request(method, path, body, params)
 
         gh = GoneLabel()
-        bot.Bot(gh, "on", self.BOT, None).apply(
+        bot.Bot(gh, "on", self.BOT, 99).apply(
             pr(labels=[bot.PENDING_LABEL]), self.decision(bot.MANUAL))
         self.assertIn(("POST", "/repos/{repo}/issues/7/labels",
                        {"labels": [bot.MANUAL_LABEL]}), gh.requests)
@@ -395,19 +396,19 @@ class TestEffects(unittest.TestCase):
                 return super().request(method, path, body, params)
 
         with self.assertRaises(bot.HTTPError):
-            bot.Bot(Broken(), "on", self.BOT, None).apply(
+            bot.Bot(Broken(), "on", self.BOT, 99).apply(
                 pr(labels=[bot.PENDING_LABEL]), self.decision(bot.MANUAL))
 
     def test_skip_without_comment_posts_none(self):
         gh = FakeGitHub()
-        bot.Bot(gh, "on", self.BOT, None).apply(
+        bot.Bot(gh, "on", self.BOT, 99).apply(
             pr(labels=[bot.PENDING_LABEL]),
             bot.Decision(bot.SKIP, ["draft"]))
         self.assertEqual([m for m, _, _ in gh.requests], ["DELETE"])
 
     def test_dry_run_logs_new_decision_only(self):
         manual = self.decision(bot.MANUAL, "reason")
-        logged = comment(self.BOT, bot.log_entry(pr(), manual, True))
+        logged = comment(self.BOT, bot.log_entry(pr(), manual, "dry-run"))
         gh = FakeGitHub([logged])
         runner = bot.Bot(gh, "dry-run", self.BOT, 99)
 
@@ -419,6 +420,60 @@ class TestEffects(unittest.TestCase):
         self.assertEqual([(m, p) for m, p, _ in gh.requests],
                          [("POST", "/repos/{repo}/issues/99/comments")] * 2)
         self.assertIn("would be merged", gh.requests[1][2]["body"])
+
+    def test_headlines_tell_dry_run_from_live(self):
+        cooling = self.decision(bot.COOLING)
+        cooling.merge_after = NOW
+        expected = {
+            "dry-run": {
+                bot.MANUAL: "**Dry run**, nothing done: PR 7 (hello 2.1.0) by "
+                            "`bob` needs a manual review.",
+                bot.PENDING: "**Dry run**, nothing done: PR 7 (hello 2.1.0) "
+                             "by `bob` is eligible and waiting for its checks "
+                             "to complete.",
+                bot.COOLING: "**Dry run**, nothing done: PR 7 (hello 2.1.0) "
+                             "by `bob` is eligible and cooling off until "
+                             "2026-10-28 12:00 UTC.",
+                bot.MERGE: "**Dry run**, nothing done: PR 7 (hello 2.1.0) by "
+                           "`bob` would be merged."},
+            "on": {
+                bot.MANUAL: "**Live**: PR 7 (hello 2.1.0) by `bob` needs a "
+                            "manual review; labeled `auto-merge: manual` and "
+                            "commented.",
+                bot.PENDING: "**Live**: PR 7 (hello 2.1.0) by `bob` is "
+                             "eligible and waiting for its checks to "
+                             "complete; labeled `auto-merge: pending` and "
+                             "commented.",
+                bot.COOLING: "**Live**: PR 7 (hello 2.1.0) by `bob` is "
+                             "eligible and cooling off until 2026-10-28 "
+                             "12:00 UTC; labeled `auto-merge: cooling` and "
+                             "commented.",
+                bot.MERGE: "**Live**: PR 7 (hello 2.1.0) by `bob` was "
+                           "merged."}}
+        for mode, headlines in expected.items():
+            for action, headline in headlines.items():
+                decision = (cooling if action == bot.COOLING
+                            else self.decision(action))
+                entry = bot.log_entry(pr(), decision, mode)
+                self.assertEqual(entry.splitlines()[1], headline)
+                self.assertIn(f"mode={mode} -->", entry.splitlines()[0])
+
+    def test_decision_logged_again_in_new_mode(self):
+        manual = self.decision(bot.MANUAL, "reason")
+        gh = FakeGitHub([comment(self.BOT,
+                                 bot.log_entry(pr(), manual, "dry-run"))])
+        bot.Bot(gh, "on", self.BOT, 99).apply(pr(labels=[bot.MANUAL_LABEL]),
+                                              manual)
+        logged = [body for _, path, body in gh.requests if path == self.LOG]
+        self.assertEqual(len(logged), 1)
+        self.assertIn("**Live**", logged[0]["body"])
+
+    def test_on_skip_is_not_logged(self):
+        gh = FakeGitHub()
+        bot.Bot(gh, "on", self.BOT, 99).apply(
+            pr(labels=[bot.COOLING_LABEL]),
+            bot.Decision(bot.SKIP, ["conflicts with the base branch"]))
+        self.assertNotIn(self.LOG, [path for _, path, _ in gh.requests])
 
     def test_wrong_identity_stops(self):
         gh = FakeGitHub()
@@ -436,7 +491,7 @@ class TestEffects(unittest.TestCase):
     def test_deleted_accounts_are_nobody(self):
         merge = self.decision(bot.MERGE)
         ghost = {"id": 1, "user": None,
-                 "body": bot.log_entry(pr(), merge, True)}
+                 "body": bot.log_entry(pr(), merge, "dry-run")}
         gh = FakeGitHub([ghost])
         bot.Bot(gh, "dry-run", self.BOT, 99).apply(pr(), merge)
         self.assertEqual(len(gh.requests), 1)
@@ -446,7 +501,7 @@ class TestEffects(unittest.TestCase):
         cooling = self.decision(bot.COOLING)
         cooling.merge_after = NOW
         gh = FakeGitHub([comment(self.BOT,
-                                 bot.log_entry(pr(), pending, True))])
+                                 bot.log_entry(pr(), pending, "dry-run"))])
         bot.Bot(gh, "dry-run", self.BOT, 99).apply(pr(), cooling)
         self.assertEqual(len(gh.requests), 1)
         self.assertIn("cooling off until 2026-10-28 12:00 UTC",
@@ -456,7 +511,7 @@ class TestEffects(unittest.TestCase):
         cooling = self.decision(bot.COOLING)
         cooling.merge_after = NOW
         gh = FakeGitHub()
-        bot.Bot(gh, "on", self.BOT, None).apply(
+        bot.Bot(gh, "on", self.BOT, 99).apply(
             pr(labels=[bot.PENDING_LABEL]), cooling)
         self.assertEqual(gh.requests[:2], [
             ("DELETE", "/repos/{repo}/issues/7/labels/auto-merge%3A%20pending",
@@ -467,7 +522,7 @@ class TestEffects(unittest.TestCase):
 
     def test_skip_removes_cooling_label(self):
         gh = FakeGitHub()
-        bot.Bot(gh, "on", self.BOT, None).apply(
+        bot.Bot(gh, "on", self.BOT, 99).apply(
             pr(labels=[bot.COOLING_LABEL]),
             bot.Decision(bot.SKIP, ["conflicts with the base branch"]))
         self.assertEqual([(m, p) for m, p, _ in gh.requests], [
@@ -480,7 +535,7 @@ class TestEffects(unittest.TestCase):
     def test_dry_run_ignores_comments_by_others(self):
         merge = self.decision(bot.MERGE)
         gh = FakeGitHub([comment("mallory", bot.log_entry(pr(), merge,
-                                                          True))])
+                                                          "dry-run"))])
         bot.Bot(gh, "dry-run", self.BOT, 99).apply(pr(), merge)
         self.assertEqual(len(gh.requests), 1)
 
@@ -494,7 +549,7 @@ class TestEffects(unittest.TestCase):
 
     def test_on_merges_evaluated_head(self):
         gh = FakeGitHub()
-        runner = bot.Bot(gh, "on", self.BOT, None)
+        runner = bot.Bot(gh, "on", self.BOT, 99)
         merged = pr(labels=[bot.PENDING_LABEL])
         runner.merge(merged)
         runner.apply(merged, self.decision(bot.MERGE))
@@ -505,7 +560,10 @@ class TestEffects(unittest.TestCase):
         self.assertEqual(methods, [
             ("DELETE", "/repos/{repo}/issues/7/labels/auto-merge%3A%20pending"),
             ("POST", "/repos/{repo}/issues/7/labels"),
-            ("POST", "/repos/{repo}/issues/7/comments")])
+            ("POST", "/repos/{repo}/issues/7/comments"),
+            ("POST", self.LOG)])
+        self.assertIn("**Live**: PR 7 (hello 2.1.0) by `bob` was merged.",
+                      gh.requests[-1][2]["body"])
 
     def test_on_updates_own_comment(self):
         manual = self.decision(bot.MANUAL, "new reason")
@@ -513,19 +571,115 @@ class TestEffects(unittest.TestCase):
             bot.PENDING)), id=5)
         gh = FakeGitHub([comment("mallory", "<!-- automerge pr=7 sha=x "
                                  "action=merge -->", id=4), old])
-        bot.Bot(gh, "on", self.BOT, None).apply(
+        bot.Bot(gh, "on", self.BOT, 99).apply(
             pr(labels=[bot.MANUAL_LABEL]), manual)
-        self.assertEqual(gh.requests, [(
+        self.assertEqual(gh.requests[0], (
             "PATCH", "/repos/{repo}/issues/comments/5",
-            {"body": bot.pr_comment(pr(), manual)})])
+            {"body": bot.pr_comment(pr(), manual)}))
+        self.assertEqual([path for _, path, _ in gh.requests[1:]],
+                         [self.LOG])
 
     def test_on_leaves_unchanged_comment(self):
         pending = self.decision(bot.PENDING)
-        gh = FakeGitHub([comment(self.BOT, bot.pr_comment(pr(), pending))])
-        bot.Bot(gh, "on", self.BOT, None).apply(
+        gh = FakeGitHub([comment(self.BOT, bot.pr_comment(pr(), pending)),
+                         comment(self.BOT, bot.log_entry(pr(), pending,
+                                                         "on"))])
+        bot.Bot(gh, "on", self.BOT, 99).apply(
             pr(labels=[bot.PENDING_LABEL]), pending)
         self.assertEqual(gh.requests, [])
 
+
+def issue(number, title, login=TestEffects.BOT, pull=False):
+    data = {"number": number, "node_id": f"I_{number}", "title": title,
+            "user": {"login": login}}
+    if pull:
+        data["pull_request"] = {}
+    return data
+
+
+class IssueGitHub(FakeGitHub):
+    """Lists the given open issues, creates issue 50, and fails GraphQL
+    calls when told so."""
+
+    def __init__(self, issues, graphql_fails=False):
+        super().__init__(listings={"/repos/{repo}/issues": issues})
+        self.graphql_fails = graphql_fails
+
+    def request(self, method, path, body=None, params=None):
+        super().request(method, path, body, params)
+        if path == "/repos/{repo}/issues":
+            return issue(50, body["title"])
+        return {"user": {"login": TestEffects.BOT}}
+
+    def graphql(self, query, **variables):
+        self.requests.append(("GRAPHQL", query.split()[3], variables["id"]))
+        if self.graphql_fails:
+            raise OSError("Resource not accessible by integration")
+        return {}
+
+
+class TestLogIssue(unittest.TestCase):
+
+    def test_titles(self):
+        self.assertEqual(bot.log_title("year", NOW), "Auto-merge log 2026")
+        self.assertEqual(bot.log_title("month", NOW),
+                         "Auto-merge log 2026-10")
+        self.assertEqual(bot.log_title("day", NOW),
+                         "Auto-merge log 2026-10-28")
+        self.assertEqual(bot.log_title("week", NOW),
+                         "Auto-merge log 2026-W44")
+        # ISO weeks belong to the year of their Thursday
+        self.assertEqual(bot.log_title("week", datetime(2027, 1, 1)),
+                         "Auto-merge log 2026-W53")
+        self.assertEqual(bot.log_title("week", datetime(2025, 12, 29)),
+                         "Auto-merge log 2026-W01")
+
+    def test_current_issue_is_reused(self):
+        gh = IssueGitHub([issue(3, "Auto-merge log 2025"),
+                          issue(4, "Auto-merge log 2026")])
+        self.assertEqual(bot.open_log(gh, TestEffects.BOT,
+                                      "Auto-merge log 2026"), 4)
+        self.assertEqual(gh.requests, [])
+
+    def test_rotation(self):
+        gh = IssueGitHub([issue(3, "Auto-merge log 2025"),
+                          issue(4, "Unrelated"),
+                          issue(5, "Auto-merge log 2026", login="mallory"),
+                          issue(6, "Auto-merge log 2026", pull=True)])
+        self.assertEqual(bot.open_log(gh, TestEffects.BOT,
+                                      "Auto-merge log 2026"), 50)
+        created = gh.requests[0]
+        self.assertEqual(created[:2], ("POST", "/repos/{repo}/issues"))
+        self.assertEqual(created[2]["title"], "Auto-merge log 2026")
+        self.assertIn("Previous log: #3", created[2]["body"])
+        self.assertEqual(gh.requests[1:], [
+            ("POST", "/repos/{repo}/issues/3/comments",
+             {"body": "Continued in #50."}),
+            ("PATCH", "/repos/{repo}/issues/3",
+             {"state": "closed", "state_reason": "completed"}),
+            ("GRAPHQL", "unpinIssue(input:", "I_3"),
+            ("GRAPHQL", "pinIssue(input:", "I_50")])
+
+    def test_first_issue(self):
+        gh = IssueGitHub([])
+        self.assertEqual(bot.open_log(gh, TestEffects.BOT,
+                                      "Auto-merge log 2026"), 50)
+        self.assertNotIn("Previous log", gh.requests[0][2]["body"])
+        self.assertEqual(gh.requests[1:],
+                         [("GRAPHQL", "pinIssue(input:", "I_50")])
+
+    def test_pin_failure_is_not_fatal(self):
+        gh = IssueGitHub([issue(3, "Auto-merge log 2025")],
+                         graphql_fails=True)
+        self.assertEqual(bot.open_log(gh, TestEffects.BOT,
+                                      "Auto-merge log 2026"), 50)
+        self.assertEqual(len(gh.requests), 5)
+
+    def test_wrong_identity_creates_nothing_else(self):
+        gh = IssueGitHub([issue(3, "Auto-merge log 2025")])
+        with self.assertRaises(bot.WrongIdentity):
+            bot.open_log(gh, "other[bot]", "Auto-merge log 2026")
+        self.assertEqual(len(gh.requests), 1)
 
 
 def suite(status, conclusion, slug="github-actions"):
@@ -646,7 +800,7 @@ class TestProcess(unittest.TestCase):
                     raise OSError("labels")
                 return super().request(method, path, body, params)
 
-        runner = bot.Bot(FailingGitHub(), "on", TestEffects.BOT, None)
+        runner = bot.Bot(FailingGitHub(), "on", TestEffects.BOT, 99)
         rows, errors = bot.process(
             [pr_listing(1), pr_listing(2)],
             lambda pr, merged: CountingData(merged), runner,

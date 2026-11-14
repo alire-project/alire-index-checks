@@ -39,9 +39,30 @@ veto (the `auto-merge: veto` label, or changes requested by a maintainer),
 passing checks, a successful build of every release, one hour since the PR
 last changed (pushed, opened, out of draft, reopened or retargeted; except
 withdrawals), and at most 10 releases by the author merged automatically in
-the last 24 hours. In `dry-run` mode it only
-logs its decisions to a tracking issue; in `on` mode it labels, comments and
-merges. Its offline tests are in `tests/test_automerge_bot.py`.
+the last 24 hours. In `dry-run` mode it only logs its decisions; in `on` mode
+it also labels, comments and merges. Its offline tests are in
+`tests/test_automerge_bot.py`.
+
+In both modes, each change of decision is logged as a comment in a log issue,
+as a **Dry run** entry (nothing was done) or a **Live** one (the PR was
+labeled and commented, or merged). The bot keeps one log issue per year (or
+month, week or day, with `--log-period`): it creates and pins the issue for
+the current period, and closes and unpins its previous one. Only issues and
+comments created by the bot itself count, so nobody else can suppress or fake
+entries.
+
+`scripts/automerge-mode.sh` shows or switches the bot's mode in an index:
+
+```
+scripts/automerge-mode.sh                # show the mode and log issues
+scripts/automerge-mode.sh on --run       # switch and run at once
+scripts/automerge-mode.sh off            # the kill switch
+scripts/automerge-mode.sh --period month # a log issue per month
+```
+
+Leaving `on` withdraws the bot's promises to merge: open PRs lose their
+`auto-merge: pending` or `auto-merge: cooling` label, and get a comment saying
+that they will be reviewed manually.
 
 ## Mirror workflows
 
