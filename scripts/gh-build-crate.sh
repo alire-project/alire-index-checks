@@ -1,7 +1,8 @@
 #!/bin/bash
 
 trap 'echo "ERROR at line ${LINENO} (code: $?)" >&2' ERR
-trap 'echo "Interrupted" >&2 ; exit 1' INT
+interrupted=false
+trap 'echo "Interrupted" >&2 ; interrupted=true ; exit 1' INT TERM
 
 set -o errexit
 set -o nounset
@@ -131,9 +132,10 @@ function report_outcomes() {
    # reads through the GitHub API: a release must build (or be fetched) on at
    # least one platform, while skipped crates still make the job succeed. A
    # single annotation is used as GitHub keeps only 10 per step. Run on exit,
-   # so that a crate whose test ended the script is reported as failed.
+   # so that a crate whose test ended the script is reported as failed
+   # (unless the job was cancelled, which says nothing about the crate).
    local status=$?
-   if [[ $status -ne 0 && -n $testing ]]; then
+   if [[ $status -ne 0 && -n $testing ]] && ! $interrupted; then
       outcome failed $testing
    fi
    local IFS=";"

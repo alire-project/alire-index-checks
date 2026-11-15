@@ -27,7 +27,8 @@ NOW = datetime(2026, 10, 28, 12, 0, tzinfo=timezone.utc)
 
 
 def eligible(*releases: tuple[str, str], kind: str = RELEASES) -> Eligibility:
-    return Eligibility(True, kind, list(releases), [])
+    return Eligibility(True, kind, list(releases), [],
+                       list(releases) if kind == WITHDRAWALS else [])
 
 
 UBUNTU = "native / ubuntu-latest"
@@ -181,10 +182,19 @@ class TestDecide(unittest.TestCase):
     def test_ineligible_withdrawal_needs_no_build(self):
         data = FakeData(
             result=Eligibility(False, WITHDRAWALS, [("hello", "1.0.0")],
-                               ["bob does not maintain hello"]),
+                               ["bob does not maintain hello"],
+                               [("hello", "1.0.0")]),
             annotations=[(UBUNTU, "skipped hello=1.0.0 (unavailable)")])
         self.assertEqual(self.decide(data).reasons,
                          ["bob does not maintain hello"])
+
+    def test_mixed_pr_builds_only_new_releases(self):
+        data = FakeData(result=Eligibility(
+            False, None, [("hello", "2.1.0"), ("hello", "1.0.0")],
+            ["the PR mixes new releases and withdrawals"],
+            [("hello", "1.0.0")]))
+        self.assertEqual(self.decide(data).reasons,
+                         ["the PR mixes new releases and withdrawals", BUILT])
 
     def test_veto_label(self):
         decision = self.decide(labels=[bot.VETO_LABEL])
@@ -222,6 +232,14 @@ class TestDecide(unittest.TestCase):
         self.assertEqual(decision.action, bot.MANUAL)
         self.assertEqual(decision.reasons,
                          ["check failed: check/Author", BUILT])
+
+    def test_cancelled_build_is_not_explained_by_its_report(self):
+        data = FakeData(annotations=[(UBUNTU, "built hello=2.1.0"),
+                                     (WINDOWS, "failed hello=2.1.0")])
+        data.check_list.append(
+            bot.CheckRun(3, WINDOWS, "completed", "cancelled"))
+        self.assertIn(f"check failed: {ON_WINDOWS}",
+                      self.decide(data).reasons)
 
     def test_cancelled_check(self):
         data = FakeData()
@@ -462,6 +480,7 @@ class TestParsing(unittest.TestCase):
         self.assertNotIn("\n", text)
         self.assertNotIn("[", text)
         self.assertNotIn("]", text)
+        self.assertNotIn("*", bot.neutralize("distro/*, native/*"))
 
     def test_marker_round_trip(self):
         decision = bot.Decision(bot.PENDING, [])

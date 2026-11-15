@@ -359,7 +359,7 @@ def decide(pr: PullRequest, data: PRData, now: datetime) -> Decision:
     problems = eligibility.reasons + veto_reasons(pr.labels, data.reviews())
 
     checks = data.checks()
-    failed = [compact(check.name) for check in checks
+    failed = [check for check in checks
               if check.status == "completed"
               and check.conclusion not in PASSING]
     running = (not checks
@@ -372,10 +372,11 @@ def decide(pr: PullRequest, data: PRData, now: datetime) -> Decision:
     unreported = []
     unbuilt = False
     failures: set[str] = set()  # Platforms with a reported build failure
-    if (not running and eligibility.releases
-            and eligibility.kind != WITHDRAWALS):
+    added = [release for release in eligibility.releases
+             if release not in eligibility.withdrawn]
+    if not running and added:
         outcomes = build_outcomes(data.build_annotations())
-        for crate, version in eligibility.releases:
+        for crate, version in added:
             milestone = f"{crate}={version}"
             found = outcomes.get(milestone, {})
             if not found:
@@ -390,12 +391,15 @@ def decide(pr: PullRequest, data: PRData, now: datetime) -> Decision:
                 details[report] = platforms
 
     # Failed checks that a build report explains are not repeated, nor is
-    # the summary job of their workflow
+    # the summary job of their workflow. Others, e.g. cancelled, are kept.
     workflows = {platform.partition("/")[0] for platform in failures}
-    problems += [f"check failed: {name}" for name in failed
-                 if name not in failures
-                 and not (name.endswith(f"/{SUMMARY_JOB}")
-                          and name.partition("/")[0] in workflows)]
+    for check in failed:
+        name = compact(check.name)
+        explained = (name in failures
+                     or (name.endswith(f"/{SUMMARY_JOB}")
+                         and name.partition("/")[0] in workflows))
+        if not explained or check.conclusion != "failure":
+            problems.append(f"check failed: {name}")
     problems += unreported
 
     if problems or failed or unbuilt:
@@ -445,11 +449,12 @@ def neutralize(text: str) -> str:
     """Return text from a PR (its title, or file names in reasons) safe to
     include in the bot's comments: on a single line, and with HTML entities
     so that `@` and `#` cannot notify users or reference issues, `<` cannot
-    add HTML (e.g. a fake marker) and `[` cannot add links or images."""
+    add HTML (e.g. a fake marker), `[` cannot add links or images and `*`
+    cannot add emphasis (e.g. in "distro/*, native/*")."""
     text = " ".join(text.splitlines())
     for char, entity in (("&", "&amp;"), ("<", "&lt;"), (">", "&gt;"),
                          ("@", "&#64;"), ("#", "&#35;"), ("[", "&#91;"),
-                         ("]", "&#93;")):
+                         ("]", "&#93;"), ("*", "&#42;")):
         text = text.replace(char, entity)
     return text
 
