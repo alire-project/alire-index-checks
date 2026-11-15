@@ -262,8 +262,13 @@ def build_outcomes(
                 outcome = FAILED
             else:
                 outcome = words[2].strip("()") if len(words) > 2 else words[0]
-            outcomes.setdefault(words[1], {}).setdefault(
-                outcome, []).append(compact(platform))
+                # Not reasons for skipping
+                if not outcome or outcome in (BUILT, FAILED):
+                    outcome = words[0]
+            platforms = outcomes.setdefault(words[1], {}).setdefault(
+                outcome, [])
+            if compact(platform) not in platforms:
+                platforms.append(compact(platform))
     return outcomes
 
 
@@ -297,7 +302,8 @@ def build_report(milestone: str,
     5 platforms, missing dependencies on 2, failed on 1", and as its details
     the platforms of each outcome, e.g. "failed: native/windows-latest". To
     keep it short, the platforms of the most common outcome are left out
-    (they are the rest), unless several outcomes are as common."""
+    (they are the rest), unless several outcomes are as common or it had a
+    single platform."""
     first = [outcome for outcome in (BUILT, MISSING, FAILED)
              if outcome in outcomes]
     order = first + sorted(set(outcomes) - set(first))
@@ -313,7 +319,8 @@ def build_report(milestone: str,
              else f"{milestone} was not built on any platform: ")
 
     listed = [outcome for outcome, size in zip(order, sizes)
-              if size < max(sizes) or sizes.count(max(sizes)) > 1]
+              if size < max(sizes) or sizes.count(max(sizes)) > 1
+              or size == 1]
     return (start + ", ".join(counts),
             [f"{outcome}: {grouped(outcomes[outcome], known)}"
              for outcome in listed])
@@ -365,7 +372,8 @@ def decide(pr: PullRequest, data: PRData, now: datetime) -> Decision:
     unreported = []
     unbuilt = False
     failures: set[str] = set()  # Platforms with a reported build failure
-    if not running and eligibility.kind != WITHDRAWALS:
+    if (not running and eligibility.releases
+            and eligibility.kind != WITHDRAWALS):
         outcomes = build_outcomes(data.build_annotations())
         for crate, version in eligibility.releases:
             milestone = f"{crate}={version}"
@@ -695,22 +703,30 @@ class LivePRData:
 
     def checks(self) -> list[CheckRun]:
         if self._checks is None:
+            runs = self.gh.get_all(
+                f"/repos/{{repo}}/commits/{self.pr.head_sha}/check-runs",
+                params={"filter": "latest"}, key="check_runs")
             self._checks = [
                 CheckRun(run["id"], run["name"], run["status"],
                          run["conclusion"])
-                for run in self.gh.get_all(
-                    f"/repos/{{repo}}/commits/{self.pr.head_sha}/check-runs",
-                    params={"filter": "latest"}, key="check_runs")]
+                for run in runs]
             # Workflows create check runs only once their jobs start, so a
-            # workflow still queued shows only as an unfinished suite. Those
-            # of other apps are left out, as some never complete.
+            # workflow still queued shows only as an unfinished suite, and
+            # one that failed to start only as a failed one. A suite whose
+            # failure is that of its check runs is not repeated. Those of
+            # other apps are left out, as some never complete.
+            explained = {(run.get("check_suite") or {}).get("id")
+                         for run in runs
+                         if run["status"] == "completed"
+                         and run["conclusion"] not in PASSING}
             self._checks += [
                 CheckRun(0, f"workflows (suite {suite['id']})",
                          suite["status"], suite["conclusion"])
                 for suite in self.suites()
                 if (suite.get("app") or {}).get("slug") == "github-actions"
                 and (suite["status"] != "completed"
-                     or suite["conclusion"] not in PASSING)]
+                     or (suite["conclusion"] not in PASSING
+                         and suite["id"] not in explained))]
         return self._checks
 
     def build_annotations(self) -> list[tuple[str, str]]:

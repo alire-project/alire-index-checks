@@ -102,7 +102,8 @@ class TestDecide(unittest.TestCase):
         self.assertEqual(decision.action, bot.MERGE)
         self.assertIn("all 2 checks passed", decision.reasons)
         self.assertIn(BUILT, decision.reasons)
-        self.assertEqual(decision.details, {})
+        self.assertEqual(decision.details,
+                         {BUILT: [f"built or fetched: {ON_UBUNTU}"]})
 
     def test_draft_is_skipped_without_fetching(self):
         data = FakeData()
@@ -362,6 +363,17 @@ class TestParsing(unittest.TestCase):
              "c=3.0.0": {"failed": [ON_UBUNTU]},
              "make": {"external": [ON_WINDOWS]}})
 
+    def test_build_outcomes_of_odd_annotations(self):
+        # A reason for skipping cannot pass for a build, and a platform
+        # counts once
+        self.assertEqual(
+            bot.build_outcomes([
+                (UBUNTU, "skipped a=1.0.0 (built or fetched);built b=1.0.0"),
+                (UBUNTU, "built b=1.0.0;skipped c=1.0.0 ()")]),
+            {"a=1.0.0": {"skipped": [ON_UBUNTU]},
+             "b=1.0.0": {"built or fetched": [ON_UBUNTU]},
+             "c=1.0.0": {"skipped": [ON_UBUNTU]}})
+
     def test_build_report(self):
         # The platforms of the most common outcome are left out
         self.assertEqual(
@@ -382,6 +394,13 @@ class TestParsing(unittest.TestCase):
             bot.build_report("a=1.0.0", {"failed": [ON_UBUNTU, ON_WINDOWS]}),
             ("a=1.0.0 was not built on any platform: failed on all 2 "
              "platforms", []))
+
+    def test_build_report_of_single_platform(self):
+        # Named, as its failed check is not reported apart
+        self.assertEqual(
+            bot.build_report("a=1.0.0", {"failed": [ON_UBUNTU]}),
+            ("a=1.0.0 was not built on any platform: failed on 1 platform",
+             [f"failed: {ON_UBUNTU}"]))
 
     def test_build_report_of_equally_common_outcomes(self):
         self.assertEqual(
@@ -836,8 +855,8 @@ class TestLiveChecks(unittest.TestCase):
     RUN = {"id": 1, "name": "check / Author", "status": "completed",
            "conclusion": "success"}
 
-    def checks(self, *suites):
-        gh = FakeGitHub(listings={"/check-runs": [self.RUN],
+    def checks(self, *suites, runs=None):
+        gh = FakeGitHub(listings={"/check-runs": runs or [self.RUN],
                                   "/check-suites": list(suites)})
         return bot.LivePRData(gh, "", pr(), {}).checks()
 
@@ -853,6 +872,18 @@ class TestLiveChecks(unittest.TestCase):
         checks = self.checks(suite("completed", "action_required"))
         self.assertEqual(bot.decide(pr(), FakeData(check_list=checks),
                                     NOW).action, bot.MANUAL)
+
+    def test_failed_suite_of_failed_run_is_not_repeated(self):
+        failed = {**self.RUN, "conclusion": "failure",
+                  "check_suite": {"id": 9}}
+        checks = self.checks(suite("completed", "failure"), runs=[failed])
+        self.assertEqual([check.name for check in checks],
+                         ["check / Author"])
+
+    def test_failed_suite_of_passing_runs_is_kept(self):
+        passed = {**self.RUN, "check_suite": {"id": 9}}
+        checks = self.checks(suite("completed", "failure"), runs=[passed])
+        self.assertEqual(len(checks), 2)
 
     def test_suites_of_other_apps_are_ignored(self):
         self.assertEqual(len(self.checks(suite("queued", None, "other"))), 1)

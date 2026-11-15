@@ -25,7 +25,8 @@ x=0.1.0`. Once the checks of a PR end, the bot reports for each release the
 number of platforms (named after their checks) where it was built or fetched,
 missed dependencies, failed or was skipped for another reason. It lists them
 grouped by workflow, e.g. `distro/{arch,fedora-latest}` or `native/*`, except
-those of the most common outcome, which are the rest.
+those of the most common outcome, which are the rest (unless it has a single
+platform).
 
 When a PR needs a manual review, the bot gives every reason it finds, not
 only the first one: broken eligibility rules, vetoes, failed checks and
