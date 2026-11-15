@@ -551,11 +551,12 @@ class TestEffects(unittest.TestCase):
         gh = FakeGitHub()
         runner = bot.Bot(gh, "on", self.BOT, 99)
         merged = pr(labels=[bot.PENDING_LABEL])
-        runner.merge(merged)
+        runner.merge(merged, self.decision(bot.MERGE))
         runner.apply(merged, self.decision(bot.MERGE))
         self.assertEqual(gh.requests[0], (
             "PUT", "/repos/{repo}/pulls/7/merge",
-            {"merge_method": "squash", "sha": "abc123"}))
+            {"merge_method": "squash", "sha": "abc123",
+             "commit_title": "hello 2.1.0 (auto) (#7)"}))
         methods = [(m, p) for m, p, _ in gh.requests[1:]]
         self.assertEqual(methods, [
             ("DELETE", "/repos/{repo}/issues/7/labels/auto-merge%3A%20pending"),
@@ -564,6 +565,18 @@ class TestEffects(unittest.TestCase):
             ("POST", self.LOG)])
         self.assertIn("**Live**: PR 7 (hello 2.1.0) by `bob` was merged.",
                       gh.requests[-1][2]["body"])
+
+    def test_commit_title_ignores_pr_title(self):
+        several = bot.Decision(bot.MERGE, [], eligible(("hello", "2.1.0"),
+                                                       ("hello", "2.2.0")))
+        self.assertEqual(bot.commit_title(pr(title="Update"), several),
+                         "hello 2.1.0 (+) (auto) (#7)")
+
+    def test_commit_title_of_withdrawal(self):
+        yank = bot.Decision(bot.MERGE, [], eligible(("hello", "1.0.0"),
+                                                    kind=WITHDRAWALS))
+        self.assertEqual(bot.commit_title(pr(), yank),
+                         "hello 1.0.0 (yank) (auto) (#7)")
 
     def test_on_updates_own_comment(self):
         manual = self.decision(bot.MANUAL, "new reason")
