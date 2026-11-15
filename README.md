@@ -40,8 +40,11 @@ passing checks, a successful build of every release, one hour since the PR
 last changed (pushed, opened, out of draft, reopened or retargeted; except
 withdrawals), and at most 10 releases by the author merged automatically in
 the last 24 hours. In `dry-run` mode it only logs its decisions; in `on` mode
-it also labels, comments and merges. Its offline tests are in
-`tests/test_automerge_bot.py`.
+it also labels, comments and merges. Merges are squashed and titled
+`<crate> <version> (auto) (#N)` whatever the PR title, like manual merges
+(`<crate> <version> (#N)`); ` (+)` follows the version when the PR has more
+releases, and ` (yank)` precedes ` (auto)` for withdrawals. Its offline tests
+are in `tests/test_automerge_bot.py`.
 
 In both modes, each change of decision is logged as a comment in a log issue,
 as a **Dry run** entry (nothing was done) or a **Live** one (the PR was

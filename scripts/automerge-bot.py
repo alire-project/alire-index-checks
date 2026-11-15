@@ -69,7 +69,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Protocol
 
-from automerge import RELEASES, Eligibility, evaluate
+from automerge import RELEASES, WITHDRAWALS, Eligibility, evaluate
 from common import EXTERNAL, MANIFEST_RE
 
 # Time between the last change to an eligible PR (see decide()) and its
@@ -360,6 +360,18 @@ def describe(decision: Decision) -> str:
                                               for crate, version in releases))
     lines += [f"- {neutralize(reason)}" for reason in decision.reasons]
     return "\n".join(lines)
+
+
+def commit_title(pr: PullRequest, decision: Decision) -> str:
+    """Return the title of the squashed commit of a merge, whatever the PR
+    title: "crate version", as for manual merges, followed by " (+)" if the
+    PR has more releases, by " (yank)" for withdrawals, by " (auto)", and by
+    the PR number as GitHub adds it, e.g. "hello 2.1.0 (+) (auto) (#7)"."""
+    releases = decision.eligibility.releases
+    crate, version = releases[0]
+    more = " (+)" if len(releases) > 1 else ""
+    yank = " (yank)" if decision.eligibility.kind == WITHDRAWALS else ""
+    return f"{crate} {version}{more}{yank} (auto) (#{pr.number})"
 
 
 def log_entry(pr: PullRequest, decision: Decision, mode: str) -> str:
@@ -746,12 +758,13 @@ class Bot:
             self.post("POST", f"/repos/{{repo}}/issues/{pr.number}/comments",
                       body)
 
-    def merge(self, pr: PullRequest) -> None:
+    def merge(self, pr: PullRequest, decision: Decision) -> None:
         """Merge the evaluated head of a PR: GitHub refuses it if the PR
         changed since, and enforces the required checks. Must precede
         apply(), which labels and comments the merged PR."""
         self.gh.request("PUT", f"/repos/{{repo}}/pulls/{pr.number}/merge",
-                        {"merge_method": "squash", "sha": pr.head_sha})
+                        {"merge_method": "squash", "sha": pr.head_sha,
+                         "commit_title": commit_title(pr, decision)})
 
     def apply(self, pr: PullRequest, decision: Decision) -> None:
         """Label and comment according to a decision (on mode), and log it
@@ -830,7 +843,7 @@ def process(prs: list[dict[str, Any]],
             pr = pull_request(data)
             decision = decide(pr, pr_data(pr, merged_in_run), now)
             if decision.action == MERGE and bot.mode == "on":
-                bot.merge(pr)
+                bot.merge(pr, decision)
                 # Recorded before anything else can fail: the rate limit must
                 # count it, and later PRs must be evaluated against the base
                 # including it (e.g. to notice a duplicate), or not at all in
