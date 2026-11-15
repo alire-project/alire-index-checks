@@ -25,7 +25,7 @@ Dependencies: tomllib (Python >= 3.11), semver (in requirements.txt)
 """
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -52,12 +52,14 @@ WITHDRAWALS = "withdrawals"
 class Eligibility:
     eligible: bool
     kind: str | None
-    """RELEASES or WITHDRAWALS when eligible (withdrawals skip the cooling
-    off period), None otherwise"""
+    """RELEASES or WITHDRAWALS when the PR has only one of them (withdrawals
+    are not built and skip the cooling off period), None otherwise"""
     releases: list[tuple[str, str]]
     """(crate, version) of every release added or withdrawn"""
     reasons: list[str]
     """Why the PR is not eligible, one per broken rule (empty if eligible)"""
+    withdrawn: list[tuple[str, str]] = field(default_factory=list)
+    """The releases that are withdrawn, which are not built"""
 
 
 def repository(url: str, archive: bool) -> str:
@@ -182,6 +184,7 @@ def evaluate(author: str) -> Eligibility:
     """Decide whether the PR, opened by `author`, may be merged
     automatically."""
     releases = []
+    withdrawn = []
     reasons = []
     kinds = set()
     added: dict[str, list[tuple[Version, str]]] = {}  # By crate
@@ -221,12 +224,15 @@ def evaluate(author: str) -> Eligibility:
             continue
 
         releases.append((crate, version))
+        if status == "M":
+            withdrawn.append((crate, version))
 
     if len(kinds) > 1:
         reasons.append("the PR mixes new releases and withdrawals")
 
     eligible = not reasons
     return Eligibility(eligible=eligible,
-                       kind=kinds.pop() if eligible else None,
+                       kind=kinds.pop() if len(kinds) == 1 else None,
                        releases=releases,
-                       reasons=reasons)
+                       reasons=reasons,
+                       withdrawn=withdrawn)

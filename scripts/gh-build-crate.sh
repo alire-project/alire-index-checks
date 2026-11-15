@@ -1,7 +1,8 @@
 #!/bin/bash
 
 trap 'echo "ERROR at line ${LINENO} (code: $?)" >&2' ERR
-trap 'echo "Interrupted" >&2 ; exit 1' INT
+interrupted=false
+trap 'echo "Interrupted" >&2 ; interrupted=true ; exit 1' INT TERM
 
 set -o errexit
 set -o nounset
@@ -115,25 +116,35 @@ fi
 alr index --check 2>&1 | grep "Warning:" && exit 1
 
 # Outcome of each tested crate: "built", "fetched" (binary and system crates,
-# which are not built) or "skipped (<reason>)", reported in a single
-# annotation at the end (see report_outcomes)
+# which are not built), "skipped (<reason>)" or "failed", reported in a single
+# annotation on exit (see report_outcomes)
 outcomes=()
+testing="" # Crate being tested, with no outcome yet
 
 function outcome() {
    # Record outcome $1 for milestone $2, with reason $3 for skipped ones
    outcomes+=("$1 $2${3:+ ($3)}")
+   testing=""
 }
 
 function report_outcomes() {
    # Report the outcomes as a workflow annotation, which the auto-merge bot
    # reads through the GitHub API: a release must build (or be fetched) on at
    # least one platform, while skipped crates still make the job succeed. A
-   # single annotation is used as GitHub keeps only 10 per step.
+   # single annotation is used as GitHub keeps only 10 per step. Run on exit,
+   # so that a crate whose test ended the script is reported as failed
+   # (unless the job was cancelled, which says nothing about the crate).
+   local status=$?
+   if [[ $status -ne 0 && -n $testing ]] && ! $interrupted; then
+      outcome failed $testing
+   fi
    local IFS=";"
    if [[ ${#outcomes[@]} -gt 0 ]]; then
       echo "::notice title=alire-build::${outcomes[*]}"
    fi
 }
+
+trap report_outcomes EXIT
 
 # Test crate
 for file in $CHANGES; do
@@ -181,6 +192,8 @@ for file in $CHANGES; do
       echo Downgrading milestone to plain crate name
       milestone=$crate
    fi
+
+   testing=$milestone
 
    # Skip on explicit unavailability
    if alr show --system $milestone | grep -q 'Available when: False'; then
@@ -489,5 +502,3 @@ for file in $CHANGES; do
 
    echo CRATE $milestone TEST ENDED SUCCESSFULLY
 done
-
-report_outcomes
