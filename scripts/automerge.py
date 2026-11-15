@@ -52,8 +52,8 @@ WITHDRAWALS = "withdrawals"
 class Eligibility:
     eligible: bool
     kind: str | None
-    """RELEASES or WITHDRAWALS when eligible (withdrawals skip the cooling
-    off period), None otherwise"""
+    """RELEASES or WITHDRAWALS when the PR has only one of them (withdrawals
+    are not built and skip the cooling off period), None otherwise"""
     releases: list[tuple[str, str]]
     """(crate, version) of every release added or withdrawn"""
     reasons: list[str]
@@ -227,6 +227,6 @@ def evaluate(author: str) -> Eligibility:
 
     eligible = not reasons
     return Eligibility(eligible=eligible,
-                       kind=kinds.pop() if eligible else None,
+                       kind=kinds.pop() if len(kinds) == 1 else None,
                        releases=releases,
                        reasons=reasons)

@@ -11,7 +11,7 @@ Meant to run periodically (see auto-merge.yml in alire-index). Each run
 decides, for every open PR to the base branch, whether to:
 
 - skip it for now (drafts, PRs with conflicts or changed during the run);
-- leave it to a manual review, giving the reasons;
+- leave it to a manual review, giving every reason for it;
 - wait for an eligible PR's checks to complete (pending);
 - wait for an eligible PR to cool off (cooling);
 - merge it.
@@ -65,7 +65,7 @@ import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Protocol
 
@@ -117,6 +117,16 @@ MAINTAINERS = {"OWNER", "MEMBER", "COLLABORATOR"}
 # Title of the annotation with build outcomes, written by gh-build-crate.sh
 BUILD_ANNOTATION = "alire-build"
 BUILD_SUCCESSES = {"built", "fetched"}
+
+# Outcomes of a release in a build report, besides the reasons why builds
+# were skipped (MISSING is the usual one). These come first, in this order.
+BUILT = "built or fetched"
+MISSING = "missing dependencies"
+FAILED = "failed"
+
+# Name of the summary job of each build workflow, e.g. "native / all", which
+# fails when any of its platforms does (see WORKFLOWS.md in alire-index)
+SUMMARY_JOB = "all"
 
 # Hidden marker in the bot's comments, identifying the PR and decision, and
 # in log entries also the mode
@@ -170,6 +180,8 @@ class Decision:
     reasons: list[str]
     eligibility: Eligibility | None = None
     merge_after: datetime | None = None
+    details: dict[str, list[str]] = field(default_factory=dict)
+    """Sub-items of some reasons (the platforms of build reports)"""
 
 
 class PRData(Protocol):
@@ -186,8 +198,9 @@ class PRData(Protocol):
 
     def checks(self) -> list[CheckRun]: ...
 
-    def build_annotations(self) -> list[str]:
-        """Messages of the BUILD_ANNOTATION annotations of every check"""
+    def build_annotations(self) -> list[tuple[str, str]]:
+        """Check name and message of the BUILD_ANNOTATION annotations of
+        every check"""
 
     def first_check_at(self) -> datetime | None:
         """When checks first started for the current head of the PR"""
@@ -224,16 +237,86 @@ def duration(span: timedelta) -> str:
     return " ".join(f"{value}{name}" for value, name in parts)
 
 
-def build_outcomes(messages: list[str]) -> dict[str, set[str]]:
-    """Return {milestone: outcomes} from BUILD_ANNOTATION messages, which
-    look like "built hello=1.0.0;skipped world=2.0.0 (missing ...)"."""
-    outcomes: dict[str, set[str]] = {}
-    for message in messages:
+def compact(check: str) -> str:
+    """Return a check name as shown in reasons: "native/ubuntu-latest" for
+    "native / ubuntu-latest"."""
+    return check.replace(" / ", "/")
+
+
+def build_outcomes(
+        annotations: list[tuple[str, str]]) -> dict[str, dict[str, list[str]]]:
+    """Return {milestone: {outcome: platforms}} from BUILD_ANNOTATION
+    annotations (check name and message). Messages look like "built
+    hello=1.0.0;skipped world=2.0.0 (missing dependencies);failed x=0.1.0".
+    The outcome is BUILT, FAILED or why the build was skipped, and platforms
+    are named after their check (see compact)."""
+    outcomes: dict[str, dict[str, list[str]]] = {}
+    for platform, message in annotations:
         for entry in message.split(";"):
-            words = entry.split()
-            if len(words) >= 2:
-                outcomes.setdefault(words[1], set()).add(words[0])
+            words = entry.split(maxsplit=2)
+            if len(words) < 2:
+                continue
+            if words[0] in BUILD_SUCCESSES:
+                outcome = BUILT
+            elif words[0] == "failed":
+                outcome = FAILED
+            else:
+                outcome = words[2].strip("()") if len(words) > 2 else words[0]
+            outcomes.setdefault(words[1], {}).setdefault(
+                outcome, []).append(compact(platform))
     return outcomes
+
+
+def grouped(platforms: list[str], known: set[str]) -> str:
+    """Return a list of platforms as text, grouped by workflow (the part of
+    their name before "/"), e.g. "distro/{arch,fedora}, native/*, other".
+    `*` stands for every platform of a workflow in `known`, if several."""
+    texts = []
+    groups: dict[str, list[str]] = {}
+    for platform in sorted(platforms):
+        workflow, slash, name = platform.partition("/")
+        if slash:
+            groups.setdefault(workflow, []).append(name)
+        else:
+            texts.append(platform)
+    for workflow, names in groups.items():
+        total = sum(platform.startswith(f"{workflow}/") for platform in known)
+        if len(names) == 1:
+            texts.append(f"{workflow}/{names[0]}")
+        elif len(names) == total:
+            texts.append(f"{workflow}/*")
+        else:
+            texts.append(f"{workflow}/{{{','.join(names)}}}")
+    return ", ".join(sorted(texts))
+
+
+def build_report(milestone: str,
+                 outcomes: dict[str, list[str]]) -> tuple[str, list[str]]:
+    """Return the build report of a release: a reason with the number of
+    platforms of each outcome it had, e.g. "hello=1.0.0: built or fetched on
+    5 platforms, missing dependencies on 2, failed on 1", and as its details
+    the platforms of each outcome, e.g. "failed: native/windows-latest". To
+    keep it short, the platforms of the most common outcome are left out
+    (they are the rest), unless several outcomes are as common."""
+    first = [outcome for outcome in (BUILT, MISSING, FAILED)
+             if outcome in outcomes]
+    order = first + sorted(set(outcomes) - set(first))
+    sizes = [len(outcomes[outcome]) for outcome in order]
+    known = {platform for outcome in order for platform in outcomes[outcome]}
+
+    counts = [f"{outcome} on {size}" for outcome, size in zip(order, sizes)]
+    if len(order) == 1 and sizes[0] > 1:
+        counts = [f"{order[0]} on all {sizes[0]} platforms"]
+    else:
+        counts[0] += " platform" if sizes[0] == 1 else " platforms"
+    start = (f"{milestone}: " if BUILT in outcomes
+             else f"{milestone} was not built on any platform: ")
+
+    listed = [outcome for outcome, size in zip(order, sizes)
+              if size < max(sizes) or sizes.count(max(sizes)) > 1]
+    return (start + ", ".join(counts),
+            [f"{outcome}: {grouped(outcomes[outcome], known)}"
+             for outcome in listed])
 
 
 def veto_reasons(labels: list[str], reviews: list[Review]) -> list[str]:
@@ -264,37 +347,59 @@ def decide(pr: PullRequest, data: PRData, now: datetime) -> Decision:
     if problem:
         return Decision(SKIP, [problem])
 
+    # Every reason for a manual review is given, not only the first one
     eligibility = data.eligibility()
-    if not eligibility.eligible:
-        return Decision(MANUAL, eligibility.reasons, eligibility)
-
-    vetoes = veto_reasons(pr.labels, data.reviews())
-    if vetoes:
-        return Decision(MANUAL, vetoes, eligibility)
+    problems = eligibility.reasons + veto_reasons(pr.labels, data.reviews())
 
     checks = data.checks()
-    failed = [check.name for check in checks
+    failed = [compact(check.name) for check in checks
               if check.status == "completed"
               and check.conclusion not in PASSING]
-    if failed:
-        return Decision(MANUAL, [f"check failed: {name}" for name in failed],
-                        eligibility)
-    running = [check.name for check in checks if check.status != "completed"]
-    if running or not checks:
+    running = (not checks
+               or any(check.status != "completed" for check in checks))
+
+    # Builds are reported, and required of every new release, once all the
+    # checks ended
+    builds = []
+    details: dict[str, list[str]] = {}
+    unreported = []
+    unbuilt = False
+    failures: set[str] = set()  # Platforms with a reported build failure
+    if not running and eligibility.kind != WITHDRAWALS:
+        outcomes = build_outcomes(data.build_annotations())
+        for crate, version in eligibility.releases:
+            milestone = f"{crate}={version}"
+            found = outcomes.get(milestone, {})
+            if not found:
+                unreported.append(
+                    f"{milestone} was not built on any platform")
+                continue
+            unbuilt = unbuilt or BUILT not in found
+            failures.update(found.get(FAILED, []))
+            report, platforms = build_report(milestone, found)
+            builds.append(report)
+            if platforms:
+                details[report] = platforms
+
+    # Failed checks that a build report explains are not repeated, nor is
+    # the summary job of their workflow
+    workflows = {platform.partition("/")[0] for platform in failures}
+    problems += [f"check failed: {name}" for name in failed
+                 if name not in failures
+                 and not (name.endswith(f"/{SUMMARY_JOB}")
+                          and name.partition("/")[0] in workflows)]
+    problems += unreported
+
+    if problems or failed or unbuilt:
+        return Decision(MANUAL, problems + builds, eligibility,
+                        details=details)
+    if running:
         return Decision(PENDING, ["waiting for checks to complete"],
                         eligibility)
 
     passed = f"all {len(checks)} checks passed"
     if eligibility.kind != RELEASES:
         return Decision(MERGE, ["eligible withdrawal", passed], eligibility)
-
-    outcomes = build_outcomes(data.build_annotations())
-    unbuilt = [f"{crate}={version}" for crate, version in eligibility.releases
-               if not outcomes.get(f"{crate}={version}", set())
-               & BUILD_SUCCESSES]
-    if unbuilt:
-        return Decision(MANUAL, [f"{milestone} was not built on any platform"
-                                 for milestone in unbuilt], eligibility)
 
     # Cooling off starts when the PR last changed, so that maintainers see it
     # for the whole period: when checks first ran on its head, when it was
@@ -318,13 +423,11 @@ def decide(pr: PullRequest, data: PRData, now: datetime) -> Decision:
             eligibility)
 
     return Decision(MERGE, [
-        "eligible releases", passed,
-        "built or fetched: " + ", ".join(
-            f"{crate}={version}" for crate, version in eligibility.releases),
+        "eligible releases", passed, *builds,
         f"no veto since {started:%Y-%m-%d %H:%M} UTC",
         f"{recent} other releases by {pr.author} merged automatically in "
         f"{RATE_WINDOW_TEXT}"],
-        eligibility, merge_after)
+        eligibility, merge_after, details)
 
 
 # --- Messages
@@ -358,7 +461,10 @@ def describe(decision: Decision) -> str:
     if releases:
         lines.append("Releases: " + ", ".join(f"`{crate}={version}`"
                                               for crate, version in releases))
-    lines += [f"- {neutralize(reason)}" for reason in decision.reasons]
+    for reason in decision.reasons:
+        lines.append(f"- {neutralize(reason)}")
+        lines += [f"  - {neutralize(detail)}"
+                  for detail in decision.details.get(reason, [])]
     return "\n".join(lines)
 
 
@@ -607,8 +713,8 @@ class LivePRData:
                      or suite["conclusion"] not in PASSING)]
         return self._checks
 
-    def build_annotations(self) -> list[str]:
-        return [annotation["message"]
+    def build_annotations(self) -> list[tuple[str, str]]:
+        return [(check.name, annotation["message"])
                 for check in self.checks() if check.id
                 for annotation in self.gh.get_all(
                     f"/repos/{{repo}}/check-runs/{check.id}/annotations")

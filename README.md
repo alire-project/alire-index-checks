@@ -20,7 +20,18 @@ The bot also requires every release to build (or, for binary and system
 crates, to be fetched) on at least one platform, as builds skipped for missing
 dependencies or unavailable releases still succeed. `gh-build-crate.sh`
 reports the outcome of each crate in a single `alire-build` annotation, e.g.
-`built hello=2.1.0;skipped world=1.0.0 (missing dependencies)`.
+`built hello=2.1.0;skipped world=1.0.0 (missing dependencies);failed
+x=0.1.0`. Once the checks of a PR end, the bot reports for each release the
+number of platforms (named after their checks) where it was built or fetched,
+missed dependencies, failed or was skipped for another reason. It lists them
+grouped by workflow, e.g. `distro/{arch,fedora-latest}` or `native/*`, except
+those of the most common outcome, which are the rest.
+
+When a PR needs a manual review, the bot gives every reason it finds, not
+only the first one: broken eligibility rules, vetoes, failed checks and
+releases not built on any platform. Failed checks that a build report already
+explains (a failed build and the summary job of its workflow) are not
+repeated.
 
 `scripts/check-automerge.py <login>` reports the same from the command
 line. With `ALL_CRATES` it replays the history of an index instead, comparing

@@ -30,6 +30,13 @@ def eligible(*releases: tuple[str, str], kind: str = RELEASES) -> Eligibility:
     return Eligibility(True, kind, list(releases), [])
 
 
+UBUNTU = "native / ubuntu-latest"
+WINDOWS = "native / windows-latest"
+BUILT = "hello=2.1.0: built or fetched on 1 platform"
+ON_UBUNTU = "native/ubuntu-latest"  # As shown in reasons
+ON_WINDOWS = "native/windows-latest"
+
+
 @dataclass
 class FakeData:
     """PRData with an eligible single release, built, whose checks passed
@@ -39,10 +46,10 @@ class FakeData:
         default_factory=lambda: eligible(("hello", "2.1.0")))
     review_list: list = field(default_factory=list)
     check_list: list = field(default_factory=lambda: [
-        bot.CheckRun(1, "native / ubuntu-latest", "completed", "success"),
+        bot.CheckRun(1, UBUNTU, "completed", "success"),
         bot.CheckRun(2, "check / Release-only", "completed", "success")])
     annotations: list = field(
-        default_factory=lambda: ["built hello=2.1.0"])
+        default_factory=lambda: [(UBUNTU, "built hello=2.1.0")])
     started: datetime | None = NOW - timedelta(hours=2)
     changed: datetime | None = None
     recent: int = 0
@@ -94,6 +101,8 @@ class TestDecide(unittest.TestCase):
         decision = self.decide()
         self.assertEqual(decision.action, bot.MERGE)
         self.assertIn("all 2 checks passed", decision.reasons)
+        self.assertIn(BUILT, decision.reasons)
+        self.assertEqual(decision.details, {})
 
     def test_draft_is_skipped_without_fetching(self):
         data = FakeData()
@@ -110,7 +119,71 @@ class TestDecide(unittest.TestCase):
         decision = self.decide(FakeData(result=Eligibility(
             False, None, [("hello", "2.1.0")], ["hello: `actions` differs"])))
         self.assertEqual(decision.action, bot.MANUAL)
-        self.assertEqual(decision.reasons, ["hello: `actions` differs"])
+        self.assertEqual(decision.reasons,
+                         ["hello: `actions` differs", BUILT])
+
+    def test_every_reason_for_manual_review(self):
+        data = FakeData(
+            result=Eligibility(False, RELEASES, [("hello", "2.1.0")],
+                               ["hello: `actions` differs"]),
+            review_list=[bot.Review("alice", "MEMBER", "CHANGES_REQUESTED")],
+            annotations=[
+                (UBUNTU, "skipped hello=2.1.0 (missing dependencies)"),
+                (WINDOWS, "failed hello=2.1.0")])
+        data.check_list.append(
+            bot.CheckRun(3, WINDOWS, "completed", "failure"))
+        decision = self.decide(data, labels=[bot.VETO_LABEL])
+        self.assertEqual(decision.action, bot.MANUAL)
+        report = ("hello=2.1.0 was not built on any platform: missing "
+                  "dependencies on 1 platform, failed on 1")
+        self.assertEqual(decision.reasons, [
+            "hello: `actions` differs",
+            f"vetoed with the `{bot.VETO_LABEL}` label",
+            "changes requested by alice",
+            report])
+        self.assertEqual(decision.details, {report: [
+            f"missing dependencies: {ON_UBUNTU}", f"failed: {ON_WINDOWS}"]})
+
+    def test_failed_build_is_reported_once(self):
+        # Neither its check nor the summary job of its workflow are repeated
+        data = FakeData(annotations=[(UBUNTU, "built hello=2.1.0"),
+                                     (WINDOWS, "failed hello=2.1.0")])
+        data.check_list += [
+            bot.CheckRun(3, WINDOWS, "completed", "failure"),
+            bot.CheckRun(4, "native / all", "completed", "failure")]
+        decision = self.decide(data)
+        self.assertEqual(decision.action, bot.MANUAL)
+        self.assertEqual(decision.reasons, [
+            "hello=2.1.0: built or fetched on 1 platform, failed on 1"])
+
+    def test_failed_check_without_build_report_is_kept(self):
+        data = FakeData(annotations=[(UBUNTU, "built hello=2.1.0"),
+                                     (WINDOWS, "failed other=1.0.0")])
+        data.check_list += [
+            bot.CheckRun(3, WINDOWS, "completed", "failure"),
+            bot.CheckRun(4, "native / all", "completed", "failure"),
+            bot.CheckRun(5, "distro / all", "completed", "failure")]
+        self.assertEqual(self.decide(data).reasons, [
+            f"check failed: {ON_WINDOWS}", "check failed: native/all",
+            "check failed: distro/all", BUILT])
+
+    def test_manual_without_builds_while_checks_run(self):
+        data = FakeData(result=Eligibility(
+            False, RELEASES, [("hello", "2.1.0")], ["first release"]))
+        data.check_list.append(bot.CheckRun(3, "distro / all", "queued",
+                                            None))
+        decision = self.decide(data)
+        self.assertEqual(decision.action, bot.MANUAL)
+        self.assertEqual(decision.reasons, ["first release"])
+        self.assertNotIn("annotations", data.asked)
+
+    def test_ineligible_withdrawal_needs_no_build(self):
+        data = FakeData(
+            result=Eligibility(False, WITHDRAWALS, [("hello", "1.0.0")],
+                               ["bob does not maintain hello"]),
+            annotations=[(UBUNTU, "skipped hello=1.0.0 (unavailable)")])
+        self.assertEqual(self.decide(data).reasons,
+                         ["bob does not maintain hello"])
 
     def test_veto_label(self):
         decision = self.decide(labels=[bot.VETO_LABEL])
@@ -146,7 +219,8 @@ class TestDecide(unittest.TestCase):
             bot.CheckRun(3, "check / Author", "completed", "failure"))
         decision = self.decide(data)
         self.assertEqual(decision.action, bot.MANUAL)
-        self.assertEqual(decision.reasons, ["check failed: check / Author"])
+        self.assertEqual(decision.reasons,
+                         ["check failed: check/Author", BUILT])
 
     def test_cancelled_check(self):
         data = FakeData()
@@ -174,33 +248,39 @@ class TestDecide(unittest.TestCase):
 
     def test_not_built(self):
         data = FakeData(annotations=[
-            "skipped hello=2.1.0 (missing dependencies)"])
+            (UBUNTU, "skipped hello=2.1.0 (missing dependencies)")])
         decision = self.decide(data)
+        self.assertEqual(decision.action, bot.MANUAL)
+        self.assertEqual(decision.reasons, [
+            "hello=2.1.0 was not built on any platform: missing dependencies "
+            "on 1 platform"])
+
+    def test_no_annotations(self):
+        decision = self.decide(FakeData(annotations=[]))
         self.assertEqual(decision.action, bot.MANUAL)
         self.assertEqual(decision.reasons,
                          ["hello=2.1.0 was not built on any platform"])
 
-    def test_no_annotations(self):
-        self.assertEqual(self.decide(FakeData(annotations=[])).action,
-                         bot.MANUAL)
-
     def test_built_on_one_platform(self):
         data = FakeData(annotations=[
-            "skipped hello=2.1.0 (unavailable)", "built hello=2.1.0"])
+            (WINDOWS, "skipped hello=2.1.0 (unavailable)"),
+            (UBUNTU, "built hello=2.1.0")])
         self.assertEqual(self.decide(data).action, bot.MERGE)
 
     def test_fetched_counts_as_built(self):
         data = FakeData(result=eligible(("gnat_native", "15.0.0")),
-                        annotations=["fetched gnat_native=15.0.0"])
+                        annotations=[(UBUNTU, "fetched gnat_native=15.0.0")])
         self.assertEqual(self.decide(data).action, bot.MERGE)
 
     def test_every_release_must_be_built(self):
         data = FakeData(result=eligible(("a", "1.0.0"), ("b", "1.0.0")),
-                        annotations=["built a=1.0.0;skipped b=1.0.0 (x)"])
+                        annotations=[
+                            (UBUNTU, "built a=1.0.0;skipped b=1.0.0 (x)")])
         decision = self.decide(data)
         self.assertEqual(decision.action, bot.MANUAL)
-        self.assertEqual(decision.reasons,
-                         ["b=1.0.0 was not built on any platform"])
+        self.assertEqual(decision.reasons, [
+            "a=1.0.0: built or fetched on 1 platform",
+            "b=1.0.0 was not built on any platform: x on 1 platform"])
 
     def test_cooling_off(self):
         started = NOW - bot.COOLING_OFF + timedelta(minutes=1)
@@ -239,7 +319,7 @@ class TestDecide(unittest.TestCase):
     def test_rate_limit(self):
         data = FakeData(recent=bot.MAX_RELEASES_PER_DAY - 1,
                         result=eligible(("a", "1.0.0"), ("b", "1.0.0")),
-                        annotations=["built a=1.0.0;built b=1.0.0"])
+                        annotations=[(UBUNTU, "built a=1.0.0;built b=1.0.0")])
         decision = self.decide(data)
         self.assertEqual(decision.action, bot.MANUAL)
         self.assertIn("would exceed", decision.reasons[0])
@@ -272,10 +352,60 @@ class TestParsing(unittest.TestCase):
     def test_build_outcomes(self):
         self.assertEqual(
             bot.build_outcomes([
-                "built a=1.0.0;skipped b=2.0.0 (missing dependencies)",
-                "fetched b=2.0.0;skipped make (external)", ""]),
-            {"a=1.0.0": {"built"}, "b=2.0.0": {"skipped", "fetched"},
-             "make": {"skipped"}})
+                (UBUNTU, "built a=1.0.0;skipped b=2.0.0 (missing "
+                         "dependencies);failed c=3.0.0"),
+                (WINDOWS, "fetched b=2.0.0;skipped make (external)"),
+                ("distro / all", "")]),
+            {"a=1.0.0": {"built or fetched": [ON_UBUNTU]},
+             "b=2.0.0": {"missing dependencies": [ON_UBUNTU],
+                         "built or fetched": [ON_WINDOWS]},
+             "c=3.0.0": {"failed": [ON_UBUNTU]},
+             "make": {"external": [ON_WINDOWS]}})
+
+    def test_build_report(self):
+        # The platforms of the most common outcome are left out
+        self.assertEqual(
+            bot.build_report("a=1.0.0", {
+                "unavailable": ["macports/macos-15"],
+                "failed": [ON_WINDOWS],
+                "missing dependencies": ["distro/fedora", "distro/arch"],
+                "built or fetched": [ON_UBUNTU, "native/macos-15",
+                                     "distro/debian"]}),
+            ("a=1.0.0: built or fetched on 3 platforms, missing dependencies "
+             "on 2, failed on 1, unavailable on 1",
+             ["missing dependencies: distro/{arch,fedora}",
+              f"failed: {ON_WINDOWS}",
+              "unavailable: macports/macos-15"]))
+
+    def test_build_report_of_single_outcome(self):
+        self.assertEqual(
+            bot.build_report("a=1.0.0", {"failed": [ON_UBUNTU, ON_WINDOWS]}),
+            ("a=1.0.0 was not built on any platform: failed on all 2 "
+             "platforms", []))
+
+    def test_build_report_of_equally_common_outcomes(self):
+        self.assertEqual(
+            bot.build_report("a=1.0.0", {
+                "built or fetched": [ON_UBUNTU, ON_WINDOWS],
+                "missing dependencies": ["distro/arch", "distro/fedora"]}),
+            ("a=1.0.0: built or fetched on 2 platforms, missing dependencies "
+             "on 2",
+             ["built or fetched: native/*",
+              "missing dependencies: distro/*"]))
+
+    def test_grouped(self):
+        known = {"distro/arch", "distro/fedora", "distro/debian",
+                 "native/a", "native/b", "macports/macos-15", "other"}
+        self.assertEqual(
+            bot.grouped(["native/b", "other", "distro/fedora", "native/a",
+                         "distro/arch", "macports/macos-15"], known),
+            "distro/{arch,fedora}, macports/macos-15, native/*, other")
+
+    def test_details_are_sub_items(self):
+        decision = bot.Decision(bot.MANUAL, ["first", "second"],
+                                details={"second": ["x: a, b", "y: #1"]})
+        self.assertEqual(bot.describe(decision),
+                         "- first\n- second\n  - x: a, b\n  - y: &#35;1")
 
     def test_previous_decisions(self):
         def comment(login, body):
@@ -741,7 +871,8 @@ class CountingData(FakeData):
     def __init__(self, merged_in_run, releases=1):
         super().__init__(
             result=eligible(*[(f"c{i}", "1.0.0") for i in range(releases)]),
-            annotations=[f"built c{i}=1.0.0" for i in range(releases)])
+            annotations=[(UBUNTU, f"built c{i}=1.0.0")
+                         for i in range(releases)])
         self.merged_in_run = merged_in_run
 
     def recent_releases(self, author, since):
