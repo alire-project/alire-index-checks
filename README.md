@@ -69,6 +69,13 @@ merge is titled with ` (manual)` instead of ` (auto)`, and externals as
 `<crate> external` (PRs with neither releases nor externals keep their
 title). Approved merges do not count towards the rate limit.
 
+`automerge-bot.py --review <PR>` prints instead what the bot would decide now
+for one PR (as if out of draft), touching nothing. `diff-release.sh` runs it
+after the diffs of each PR, so that the diff and the verdict are seen
+together. As it runs early, the checks still running are listed rather than
+taken as passed or failed. It needs `GH_TOKEN`, with read access to checks,
+pull requests, issues and actions (to leave out its own checks).
+
 In both modes, each change of decision is logged as a comment in a log issue,
 as a **Dry run** entry (nothing was done) or a **Live** one (the PR was
 labeled and commented, or merged). The bot keeps one log issue per year (or

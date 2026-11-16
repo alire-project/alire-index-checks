@@ -9,6 +9,7 @@ import importlib.util
 import os
 import sys
 import unittest
+from unittest import mock
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
@@ -180,8 +181,19 @@ class TestDecide(unittest.TestCase):
                                             None))
         decision = self.decide(data)
         self.assertEqual(decision.action, bot.MANUAL)
-        self.assertEqual(decision.reasons, ["first release"])
+        self.assertEqual(decision.reasons, ["first release", bot.WAITING])
+        self.assertEqual(decision.details, {bot.WAITING: ["distro/all"]})
         self.assertNotIn("annotations", data.asked)
+
+    def test_pending_lists_unfinished_checks(self):
+        data = FakeData()
+        data.check_list += [
+            bot.CheckRun(3, WINDOWS, "in_progress", None),
+            bot.CheckRun(0, "workflows (suite 9)", "queued", None)]
+        decision = self.decide(data)
+        self.assertEqual(decision.action, bot.PENDING)
+        self.assertEqual(decision.details, {
+            bot.WAITING: [f"{ON_WINDOWS}, workflows (suite 9)"]})
 
     def test_ineligible_withdrawal_needs_no_build(self):
         data = FakeData(
@@ -1215,6 +1227,67 @@ class TestProcess(unittest.TestCase):
             [listing], pr_data=lambda pr, merged: FakeData(result=Eligibility(
                 False, None, [], [f"not a maintainer: {pr.author}"])))
         self.assertEqual(rows[0][1:3], (bot.DELETED_AUTHOR, bot.MANUAL))
+
+
+class ReviewGitHub(FakeGitHub):
+    """Answers the requests of a review of PR 7, a draft, from run 5"""
+
+    def request(self, method, path, body=None, params=None):
+        self.requests.append((method, path, body))
+        if path.endswith("/actions/runs/5"):
+            return {"check_suite_id": 9}
+        listing = pr_listing(7)
+        listing["draft"] = True
+        return listing
+
+
+class TestReview(unittest.TestCase):
+
+    def review(self, decision):
+        decided = []
+
+        def decide(pr, data, now):
+            decided.append((pr, data))
+            return decision
+        head = mock.Mock(stdout="checked\n")
+        with mock.patch.object(bot, "decide", decide), \
+                mock.patch.object(bot.subprocess, "run", return_value=head), \
+                mock.patch.dict(os.environ, {"GITHUB_RUN_ID": "5"}):
+            text = bot.review(ReviewGitHub(), 7, NOW)
+        return text, decided[0]
+
+    def test_review_of_draft(self):
+        decision = bot.Decision(bot.PENDING, [bot.WAITING], eligible(
+            ("hello", "2.1.0")), details={bot.WAITING: ["native/*"]})
+        text, (pr, data) = self.review(decision)
+        self.assertEqual(text, (
+            "Auto-merge review: PR 7 (as if out of draft) is eligible and "
+            "waiting for its checks to complete.\n"
+            "Releases: `hello=2.1.0`\n"
+            "- waiting for checks to complete\n"
+            "  - native/*\n"))
+        self.assertFalse(pr.draft)
+        self.assertEqual(pr.head_sha, "checked")
+        self.assertEqual(data.ignored_suite, 9)
+        self.assertIsNone(data.merge_problem())
+
+    def test_review_of_manual(self):
+        text, _ = self.review(bot.Decision(bot.MANUAL, ["first release"]))
+        self.assertTrue(text.startswith(
+            "Auto-merge review: PR 7 (as if out of draft) needs a manual "
+            "review.\n"))
+
+    def test_review_leaves_out_its_own_checks(self):
+        own = {**TestLiveChecks.RUN, "id": 2, "name": "DIFF",
+               "status": "in_progress", "check_suite": {"id": 9}}
+        other = {**TestLiveChecks.RUN, "check_suite": {"id": 8}}
+        gh = FakeGitHub(listings={
+            "/check-runs": [own, other],
+            "/check-suites": [suite("in_progress", None),
+                              {**suite("completed", "success"), "id": 8}]})
+        checks = bot.CheckoutPRData(gh, "", pr(), {}, 9).checks()
+        self.assertEqual([check.name for check in checks],
+                         ["check / Author"])
 
 
 if __name__ == "__main__":

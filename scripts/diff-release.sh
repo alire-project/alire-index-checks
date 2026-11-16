@@ -42,10 +42,6 @@ alr index --del community >/dev/null || true
 
 diff_opts=(--minimal -U0 --ignore-all-space --ignore-blank-lines --ignore-cr-at-eol)
 
-is_trivial_change() {
-    [[ $1 =~ ^[+-](version|commit|url|hashes)[[:space:]]*= ]]
-}
-
 function diff_one() {
     local file="$1"
     local simple_file="$(basename $file)"
@@ -106,31 +102,6 @@ function diff_one() {
         # Echo the diff, but prefix every line with "··|" to make it easier to
         # see:
         echo "$diff_output" | sed 's/^/··| /'
-
-        # If all actual diff lines are only changing version and commit, apply
-        # label of diff OK:
-
-        echo "AUTOMATIC REVIEW FOLLOWS:"
-
-        echo "$diff_output" | grep -E '^[+-]' | grep -Ev '^[+-]{3}' | while read -r line; do
-            if ! is_trivial_change "$line"; then
-                echo "Note: non-trivial change detected, REVIEW manually:"
-                touch non_trivial # Can't use variables as we are in a subshell
-                echo "$line"
-            else
-                echo "Note: trivial change detected, skipping:"
-                echo "$line"
-            fi
-        done
-
-        # Depending on minimal value, apply label
-        if [[ ! -f non_trivial ]]; then
-            echo "Note: minimal changes, marking diff OK"
-            # apply_label "diff: OK"
-        else
-            echo "WARNING: non-trivial changes detected, manual review required"
-            # apply_label "diff: review"
-        fi
     fi
 
     return 0
@@ -139,3 +110,17 @@ function diff_one() {
 for file in $CHANGES; do
     diff_one "$file" || true # keep on trying for different files
 done
+
+# Review the PR as the auto-merge bot would, so that its verdict follows the
+# diffs. Checks still running are reported as such.
+echo " "
+echo "------8<------"
+if [[ "${ALL_CRATES:-unset}" != "unset" ]]; then
+    echo "SKIPPING auto-merge review: ALL_CRATES set, there is no PR"
+elif [[ ${GITHUB_REF:-} =~ ^refs/pull/([0-9]+)/ && -n ${GH_TOKEN:-} ]]; then
+    python3 "$(dirname "${BASH_SOURCE[0]}")/automerge-bot.py" \
+        --repo "$GITHUB_REPOSITORY" --review "${BASH_REMATCH[1]}" \
+        || echo "ERROR: auto-merge review failed"
+else
+    echo "SKIPPING auto-merge review: not a PR, or GH_TOKEN unset"
+fi
