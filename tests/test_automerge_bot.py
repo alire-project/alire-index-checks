@@ -53,6 +53,7 @@ class FakeData:
         default_factory=lambda: [(UBUNTU, "built hello=2.1.0")])
     started: datetime | None = NOW - timedelta(hours=2)
     changed: datetime | None = None
+    approved: tuple[str, datetime] | None = None
     recent: int = 0
     asked: list = field(default_factory=list)
 
@@ -79,6 +80,9 @@ class FakeData:
 
     def changed_at(self):
         return self.changed
+
+    def approval(self):
+        return self.approved
 
     def recent_releases(self, author, since):
         assert since == NOW - bot.RATE_WINDOW
@@ -347,6 +351,120 @@ class TestDecide(unittest.TestCase):
     def test_rate_limit_reached_exactly(self):
         data = FakeData(recent=bot.MAX_RELEASES_PER_DAY - 1)
         self.assertEqual(self.decide(data).action, bot.MERGE)
+
+
+
+APPROVED = bot.APPROVED_LABEL
+INELIGIBLE = Eligibility(False, None, [("hello", "2.1.0")],
+                         ["hello: first release of the crate"])
+
+
+class TestApproval(unittest.TestCase):
+
+    def decide(self, data, labels=(APPROVED,)):
+        return bot.decide(pr(labels=list(labels)), data, NOW)
+
+    def approved(self, minutes=bot.COOLING_OFF.total_seconds() / 60,
+                 **values):
+        """FakeData of an ineligible PR, approved `minutes` ago"""
+        values.setdefault("result", INELIGIBLE)
+        return FakeData(approved=("alice", NOW - timedelta(minutes=minutes)),
+                        **values)
+
+    def test_approved_is_merged(self):
+        decision = self.decide(self.approved())
+        self.assertEqual(decision.action, bot.MERGE)
+        self.assertEqual(decision.approved_by, "alice")
+        approval = "approved by alice at 2026-10-28 11:00 UTC, overriding"
+        self.assertEqual(decision.reasons, [
+            approval, "all 2 checks passed", BUILT,
+            "no veto since 2026-10-28 11:00 UTC"])
+        self.assertEqual(decision.details[approval],
+                         ["hello: first release of the crate"])
+        self.assertEqual(bot.commit_title(pr(), decision),
+                         "hello 2.1.0 (manual) (#7)")
+
+    def test_approved_cools_off_since_approval(self):
+        decision = self.decide(self.approved(minutes=10))
+        self.assertEqual(decision.action, bot.COOLING)
+        self.assertEqual(decision.merge_after,
+                         NOW + bot.COOLING_OFF - timedelta(minutes=10))
+        self.assertIn("approved by alice", bot.pr_comment(pr(), decision))
+
+    def test_approved_waits_for_checks(self):
+        data = self.approved()
+        data.check_list.append(bot.CheckRun(3, "distro / all", "queued",
+                                            None))
+        decision = self.decide(data)
+        self.assertEqual(decision.action, bot.PENDING)
+        self.assertEqual(decision.approved_by, "alice")
+
+    def test_approved_overrides_builds_and_rate_limit(self):
+        data = self.approved(annotations=[], recent=1000)
+        decision = self.decide(data)
+        self.assertEqual(decision.action, bot.MERGE)
+        self.assertIn("hello=2.1.0 was not built on any platform",
+                      decision.details[decision.reasons[0]])
+
+    def test_approval_does_not_override_vetoes_nor_checks(self):
+        data = self.approved()
+        data.check_list.append(
+            bot.CheckRun(3, "check / Author", "completed", "failure"))
+        decision = self.decide(data, labels=[APPROVED, bot.VETO_LABEL])
+        self.assertEqual(decision.action, bot.MANUAL)
+        self.assertEqual(decision.reasons[1:], [
+            f"vetoed with the `{bot.VETO_LABEL}` label",
+            "check failed: check/Author", BUILT])
+
+    def test_approval_before_last_change_is_stale(self):
+        data = self.approved(changed=NOW - timedelta(minutes=5))
+        decision = self.decide(data)
+        self.assertEqual(decision.action, bot.MANUAL)
+        self.assertIsNone(decision.approved_by)
+        self.assertEqual(decision.reasons[0],
+                         "hello: first release of the crate")
+        self.assertIn("applied before the last change", decision.reasons[1])
+
+    def test_approval_by_others_does_not_count(self):
+        decision = self.decide(FakeData(result=INELIGIBLE))
+        self.assertEqual(decision.action, bot.MANUAL)
+        self.assertIn("not applied by a maintainer", decision.reasons[1])
+
+    def test_approval_needs_the_label(self):
+        # The label may have been removed since
+        decision = self.decide(self.approved(), labels=[])
+        self.assertEqual(decision.action, bot.MANUAL)
+        self.assertIsNone(decision.approved_by)
+
+    def test_eligible_and_approved_is_merged_as_approved(self):
+        decision = self.decide(self.approved(result=eligible(
+            ("hello", "2.1.0"))))
+        self.assertEqual(decision.reasons[0],
+                         "approved by alice at 2026-10-28 11:00 UTC")
+        self.assertEqual(bot.commit_title(pr(), decision),
+                         "hello 2.1.0 (manual) (#7)")
+
+    def test_commit_title_of_external(self):
+        decision = bot.Decision(bot.MERGE, [], Eligibility(
+            False, None, [], ["externals need a manual review"],
+            externals=["make"]), approved_by="alice")
+        self.assertEqual(bot.commit_title(pr(title="Add make"), decision),
+                         "make external (manual) (#7)")
+
+    def test_commit_title_of_release_and_external(self):
+        decision = bot.Decision(bot.MERGE, [], Eligibility(
+            False, None, [("hello", "2.1.0")], ["externals need a manual "
+                                                "review"],
+            externals=["make"]), approved_by="alice")
+        self.assertEqual(bot.commit_title(pr(), decision),
+                         "hello 2.1.0 (+) (manual) (#7)")
+
+    def test_commit_title_without_releases(self):
+        decision = bot.Decision(bot.MERGE, [], Eligibility(
+            False, None, [], ["README.md: not a release manifest"]),
+            approved_by="alice")
+        self.assertEqual(bot.commit_title(pr(title="Fix typo"), decision),
+                         "Fix typo (manual) (#7)")
 
 
 class TestDuration(unittest.TestCase):
@@ -869,6 +987,53 @@ def suite(status, conclusion, slug="github-actions"):
             "created_at": "2026-10-28T10:00:00Z"}
 
 
+class PermissionGitHub(FakeGitHub):
+    """Answers permission requests with the given permissions by login"""
+
+    def __init__(self, permissions, **values):
+        super().__init__(**values)
+        self.permissions = permissions
+
+    def request(self, method, path, body=None, params=None):
+        user = path.split("/")[-2]
+        if user not in self.permissions:
+            raise bot.HTTPError(404, "not a collaborator")
+        return {"permission": self.permissions[user]}
+
+
+def labeled(name, actor, time):
+    return {"event": "labeled", "label": {"name": name},
+            "actor": {"login": actor}, "created_at": time}
+
+
+class TestLiveApproval(unittest.TestCase):
+
+    def approval(self, events, permissions):
+        gh = PermissionGitHub(permissions, listings={"/timeline": events})
+        return bot.LivePRData(gh, "", pr(), {}).approval()
+
+    def test_approval_by_maintainer(self):
+        self.assertEqual(
+            self.approval([labeled(APPROVED, "alice", "2026-10-28T10:00:00Z")],
+                          {"alice": "write"}),
+            ("alice", datetime(2026, 10, 28, 10, 0, tzinfo=timezone.utc)))
+
+    def test_latest_labeling_counts(self):
+        events = [labeled(APPROVED, "alice", "2026-10-28T10:00:00Z"),
+                  labeled("other", "carol", "2026-10-28T10:30:00Z"),
+                  labeled(APPROVED, "bob", "2026-10-28T11:00:00Z")]
+        self.assertEqual(self.approval(events, {"alice": "admin",
+                                                "bob": "write"})[0], "bob")
+        self.assertIsNone(self.approval(events, {"alice": "admin",
+                                                 "bob": "read"}))
+
+    def test_approval_by_non_maintainers(self):
+        events = [labeled(APPROVED, "mallory", "2026-10-28T10:00:00Z")]
+        self.assertIsNone(self.approval(events, {}))
+        self.assertIsNone(self.approval(events, {"mallory": "read"}))
+        self.assertIsNone(self.approval([], {}))
+
+
 class TestLiveChecks(unittest.TestCase):
 
     RUN = {"id": 1, "name": "check / Author", "status": "completed",
@@ -1008,6 +1173,20 @@ class TestProcess(unittest.TestCase):
             pr_data=lambda pr, merged: CountingData(merged, releases=6))
         self.assertEqual([row[2] for row in rows],
                          [bot.MERGE, bot.MANUAL, bot.MERGE])
+
+    def test_rate_limit_ignores_approved_merges_of_the_run(self):
+        approved = pr_listing(1)
+        approved["labels"] = [{"name": APPROVED}]
+
+        def pr_data(pr, merged):
+            data = CountingData(merged, releases=6)
+            if pr.number == 1:
+                data.approved = ("alice", NOW - bot.COOLING_OFF)
+            return data
+        rows, _ = self.run_prs([approved, pr_listing(2)], pr_data)
+        self.assertEqual([row[2] for row in rows], [bot.MERGE, bot.MERGE])
+        self.assertEqual(self.gh.requests[0][2]["commit_title"],
+                         "c0 1.0.0 (+) (manual) (#1)")
 
     def test_errors_are_isolated(self):
         def pr_data(pr, merged):

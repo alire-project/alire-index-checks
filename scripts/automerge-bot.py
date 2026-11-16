@@ -12,8 +12,8 @@ decides, for every open PR to the base branch, whether to:
 
 - skip it for now (drafts, PRs with conflicts or changed during the run);
 - leave it to a manual review, giving every reason for it;
-- wait for an eligible PR's checks to complete (pending);
-- wait for an eligible PR to cool off (cooling);
+- wait for an eligible or approved PR's checks to complete (pending);
+- wait for an eligible or approved PR to cool off (cooling);
 - merge it.
 
 A PR is merged when it is eligible (automerge.py), no maintainer vetoed it,
@@ -21,11 +21,17 @@ all its checks passed, each new release was built (or fetched) on at least
 one platform, it has cooled off for COOLING_OFF since it last changed (except
 withdrawals), and its author stays within MAX_RELEASES_PER_DAY.
 
+A PR that a maintainer approved, by applying APPROVED_LABEL after its last
+change, is merged without being eligible, built or within the rate limit (as
+if merged by hand), once no maintainer vetoed it, all its checks passed and
+it cooled off for COOLING_OFF since the approval.
+
 Nothing from the PR is executed: its head is fetched into a bare repository
 and merged there with the current tip of the base branch (`git merge-tree`,
 as GitHub only updates its own merge commits from time to time), and only
 manifests are parsed. Check results can be trusted because eligible PRs only
-touch manifests, so they run the base workflows.
+touch manifests, so they run the base workflows, and approved PRs were
+reviewed by a maintainer at the same head.
 
 Modes:
     dry-run  Decide and log, without touching any PR. As nothing is merged,
@@ -85,9 +91,11 @@ MAX_RELEASES_PER_DAY = 10
 RATE_WINDOW = timedelta(days=1)
 RATE_WINDOW_TEXT = "the last 24 hours"
 
-# Labels. The veto one is set by maintainers, the others by the bot, which
-# keeps on each PR the one for its decision (none for skipped PRs).
+# Labels. The veto and approved ones are set by maintainers, the others by
+# the bot, which keeps on each PR the one for its decision (none for skipped
+# PRs).
 VETO_LABEL = "auto-merge: veto"
+APPROVED_LABEL = "auto-merge: approved"  # Reviewed, merge after cooling off
 PENDING_LABEL = "auto-merge: pending"  # Waiting for checks
 COOLING_LABEL = "auto-merge: cooling"  # Ready, cooling off
 MANUAL_LABEL = "auto-merge: manual"
@@ -181,7 +189,10 @@ class Decision:
     eligibility: Eligibility | None = None
     merge_after: datetime | None = None
     details: dict[str, list[str]] = field(default_factory=dict)
-    """Sub-items of some reasons (the platforms of build reports)"""
+    """Sub-items of some reasons (the platforms of build reports, and what
+    an approval overrides)"""
+    approved_by: str | None = None
+    """The maintainer who approved the PR, for PRs merged on approval"""
 
 
 class PRData(Protocol):
@@ -210,8 +221,13 @@ class PRData(Protocol):
         reopened, retargeted from another base branch, or had its head
         force-pushed, if ever"""
 
+    def approval(self) -> tuple[str, datetime] | None:
+        """Who last applied APPROVED_LABEL, and when, if they have write
+        access to the repository (as maintainers do)"""
+
     def recent_releases(self, author: str, since: datetime) -> int:
-        """Releases in PRs by `author` merged automatically since `since`"""
+        """Releases in PRs by `author` merged automatically since `since`,
+        except on approval"""
 
 
 # --- Decisions (no side effects)
@@ -345,6 +361,35 @@ def veto_reasons(labels: list[str], reviews: list[Review]) -> list[str]:
     return vetoes
 
 
+def last_change(pr: PullRequest, data: PRData) -> datetime:
+    """Return when a PR last changed, from which cooling off starts so that
+    maintainers see it for the whole period: when checks first ran on its
+    head, when it was opened (the head may have been checked long before in
+    another PR), or when it left draft, was reopened, retargeted or
+    force-pushed (maybe to an old head)."""
+    return max(time for time in (data.first_check_at(), pr.created_at,
+                                 data.changed_at())
+               if time)
+
+
+def approval_of(pr: PullRequest, data: PRData
+                ) -> tuple[tuple[str, datetime] | None, list[str]]:
+    """Return who approved the current state of a PR with APPROVED_LABEL,
+    and when, if so, and otherwise why its label does not count, if it has
+    it."""
+    if APPROVED_LABEL not in pr.labels:
+        return None, []
+    approved = data.approval()
+    if not approved:
+        return None, [f"the `{APPROVED_LABEL}` label was not applied by a "
+                      f"maintainer"]
+    if approved[1] < last_change(pr, data):
+        return None, [f"the `{APPROVED_LABEL}` label was applied before the "
+                      f"last change to the PR: apply it again to approve "
+                      f"the current one"]
+    return approved, []
+
+
 def decide(pr: PullRequest, data: PRData, now: datetime) -> Decision:
     """Decide what to do with `pr` at time `now`."""
     if pr.draft:
@@ -356,7 +401,8 @@ def decide(pr: PullRequest, data: PRData, now: datetime) -> Decision:
 
     # Every reason for a manual review is given, not only the first one
     eligibility = data.eligibility()
-    problems = eligibility.reasons + veto_reasons(pr.labels, data.reviews())
+    approval, problems = approval_of(pr, data)
+    problems = veto_reasons(pr.labels, data.reviews()) + problems
 
     checks = data.checks()
     failed = [check for check in checks
@@ -400,8 +446,36 @@ def decide(pr: PullRequest, data: PRData, now: datetime) -> Decision:
                          and name.partition("/")[0] in workflows))
         if not explained or check.conclusion != "failure":
             problems.append(f"check failed: {name}")
-    problems += unreported
 
+    if approval:
+        # Merged as if eligible and built, and regardless of the rate limit,
+        # after cooling off since the approval. What it overrides is given
+        # under it.
+        approver, approved_at = approval
+        approved = (f"approved by {approver} at "
+                    f"{approved_at:%Y-%m-%d %H:%M} UTC")
+        overridden = eligibility.reasons + unreported
+        if overridden:
+            approved += ", overriding"
+            details[approved] = overridden
+        merge_after = approved_at + COOLING_OFF
+        if problems or failed:
+            return Decision(MANUAL, [approved, *problems, *builds],
+                            eligibility, details=details)
+        if running:
+            return Decision(PENDING,
+                            [approved, "waiting for checks to complete"],
+                            eligibility, merge_after, details, approver)
+        if now < merge_after:
+            return Decision(COOLING, [
+                approved, f"cooling off: {duration(merge_after - now)} left"],
+                eligibility, merge_after, details, approver)
+        return Decision(MERGE, [
+            approved, f"all {len(checks)} checks passed", *builds,
+            f"no veto since {approved_at:%Y-%m-%d %H:%M} UTC"],
+            eligibility, merge_after, details, approver)
+
+    problems = eligibility.reasons + problems + unreported
     if problems or failed or unbuilt:
         return Decision(MANUAL, problems + builds, eligibility,
                         details=details)
@@ -413,14 +487,7 @@ def decide(pr: PullRequest, data: PRData, now: datetime) -> Decision:
     if eligibility.kind != RELEASES:
         return Decision(MERGE, ["eligible withdrawal", passed], eligibility)
 
-    # Cooling off starts when the PR last changed, so that maintainers see it
-    # for the whole period: when checks first ran on its head, when it was
-    # opened (the head may have been checked long before in another PR), or
-    # when it left draft, was reopened, retargeted or force-pushed (maybe to
-    # an old head)
-    started = max(time for time in (data.first_check_at(), pr.created_at,
-                                    data.changed_at())
-                  if time)
+    started = last_change(pr, data)
     merge_after = started + COOLING_OFF
     if now < merge_after:
         return Decision(COOLING,
@@ -484,25 +551,34 @@ def describe(decision: Decision) -> str:
 def commit_title(pr: PullRequest, decision: Decision) -> str:
     """Return the title of the squashed commit of a merge, whatever the PR
     title: "crate version", as for manual merges, followed by " (+)" if the
-    PR has more releases, by " (yank)" for withdrawals, by " (auto)", and by
-    the PR number as GitHub adds it, e.g. "hello 2.1.0 (+) (auto) (#7)"."""
-    releases = decision.eligibility.releases
+    PR has more releases, by " (yank)" for withdrawals, by " (auto)" (or
+    " (manual)" for approved PRs), and by the PR number as GitHub adds it,
+    e.g. "hello 2.1.0 (+) (auto) (#7)". Externals, which only approved PRs
+    change, count as releases of version "external". Approved PRs without
+    either keep the PR title instead."""
+    by = " (manual)" if decision.approved_by else " (auto)"
+    eligibility = decision.eligibility
+    releases = eligibility.releases + [(crate, EXTERNAL)
+                                       for crate in eligibility.externals]
+    if not releases:
+        return f"{pr.title}{by} (#{pr.number})"
     crate, version = releases[0]
     more = " (+)" if len(releases) > 1 else ""
-    yank = " (yank)" if decision.eligibility.kind == WITHDRAWALS else ""
-    return f"{crate} {version}{more}{yank} (auto) (#{pr.number})"
+    yank = " (yank)" if eligibility.kind == WITHDRAWALS else ""
+    return f"{crate} {version}{more}{yank}{by} (#{pr.number})"
 
 
 def log_entry(pr: PullRequest, decision: Decision, mode: str) -> str:
     """Return the log issue comment for a new decision, which says whether
     it had any effect. The PR is not linked nor its author mentioned, so that
     neither is notified."""
+    basis = "approved" if decision.approved_by else "eligible"
     if decision.action == MANUAL:
         headline = "needs a manual review"
     elif decision.action == PENDING:
-        headline = "is eligible and waiting for its checks to complete"
+        headline = f"is {basis} and waiting for its checks to complete"
     elif decision.action == COOLING:
-        headline = ("is eligible and cooling off until "
+        headline = (f"is {basis} and cooling off until "
                     f"{decision.merge_after:%Y-%m-%d %H:%M} UTC")
     else:
         headline = "was merged" if mode == "on" else "would be merged"
@@ -528,12 +604,20 @@ def pr_comment(pr: PullRequest, decision: Decision) -> str:
     elif decision.action == SKIP:
         text = "Automatic merging of this PR is on hold:"
     elif decision.action in (PENDING, COOLING):
-        when = (f"after {decision.merge_after:%Y-%m-%d %H:%M} UTC"
-                if decision.action == COOLING
-                else f"{COOLING_OFF_TEXT} after its checks pass")
-        text = (f"This PR is eligible for automatic merging, and will be "
-                f"merged {when} unless a maintainer vetoes it (with the "
-                f"`{VETO_LABEL}` label or by requesting changes).")
+        if decision.approved_by:
+            basis = f"was approved by {decision.approved_by}"
+            when = (f"after {decision.merge_after:%Y-%m-%d %H:%M} UTC, once "
+                    f"its checks pass,")
+        else:
+            basis = "is eligible for automatic merging"
+            when = (f"after {decision.merge_after:%Y-%m-%d %H:%M} UTC"
+                    if decision.action == COOLING
+                    else f"{COOLING_OFF_TEXT} after its checks pass")
+        text = (f"This PR {basis}, and will be merged {when} unless a "
+                f"maintainer vetoes it (with the `{VETO_LABEL}` label or by "
+                f"requesting changes).")
+    elif decision.approved_by:
+        text = f"This PR was merged as approved by {decision.approved_by}:"
     else:
         text = "This PR was merged automatically:"
     return f"{marker(pr, decision)}\n{text}\n\n{describe(decision)}\n"
@@ -665,6 +749,7 @@ class LivePRData:
         """Releases merged by author in this run, which searches miss"""
         self._checks: list[CheckRun] | None = None
         self._suites: list[dict[str, Any]] | None = None
+        self._timeline: list[dict[str, Any]] | None = None
 
     def suites(self) -> list[dict[str, Any]]:
         if self._suites is None:
@@ -746,18 +831,47 @@ class LivePRData:
                  for suite in self.suites()]
         return min(times, default=None)
 
+    def timeline(self) -> list[dict[str, Any]]:
+        if self._timeline is None:
+            self._timeline = self.gh.get_all(
+                f"/repos/{{repo}}/issues/{self.pr.number}/timeline")
+        return self._timeline
+
     def changed_at(self) -> datetime | None:
         times = [datetime.fromisoformat(event["created_at"])
-                 for event in self.gh.get_all(
-                     f"/repos/{{repo}}/issues/{self.pr.number}/timeline")
+                 for event in self.timeline()
                  if event.get("event") in ("ready_for_review", "reopened",
                                            "base_ref_changed",
                                            "head_ref_force_pushed")]
         return max(times, default=None)
 
+    def approval(self) -> tuple[str, datetime] | None:
+        labeled = [event for event in self.timeline()
+                   if event.get("event") == "labeled"
+                   and (event.get("label") or {}).get("name")
+                   == APPROVED_LABEL]
+        if not labeled:
+            return None
+        actor = (labeled[-1].get("actor") or {}).get("login")
+        if not actor:
+            return None
+        try:
+            access = self.gh.request(
+                "GET", f"/repos/{{repo}}/collaborators/"
+                f"{urllib.parse.quote(actor)}/permission")
+        except HTTPError as e:
+            if e.code == 404:  # Not a collaborator
+                return None
+            raise
+        # Legacy permission: maintain counts as write, triage as read
+        if access["permission"] not in ("admin", "write"):
+            return None
+        return actor, datetime.fromisoformat(labeled[-1]["created_at"])
+
     def recent_releases(self, author: str, since: datetime) -> int:
         query = (f'repo:{self.gh.repo} is:pr is:merged '
-                 f'label:"{MERGED_LABEL}" author:{author} '
+                 f'label:"{MERGED_LABEL}" -label:"{APPROVED_LABEL}" '
+                 f'author:{author} '
                  f'merged:>={since:%Y-%m-%dT%H:%M:%SZ}')
         count = 0
         for item in self.gh.get_all("/search/issues", {"q": query},
@@ -975,7 +1089,9 @@ def process(prs: list[dict[str, Any]],
                 # count it, and later PRs must be evaluated against the base
                 # including it (e.g. to notice a duplicate), or not at all in
                 # this run. Labelling it first makes later runs count it too.
-                if decision.eligibility.kind == RELEASES:
+                # Approved PRs do not count, as if merged by hand.
+                if (decision.eligibility.kind == RELEASES
+                        and not decision.approved_by):
                     merged_in_run[pr.author] = (
                         merged_in_run.get(pr.author, 0)
                         + len(decision.eligibility.releases))

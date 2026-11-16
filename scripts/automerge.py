@@ -60,6 +60,8 @@ class Eligibility:
     """Why the PR is not eligible, one per broken rule (empty if eligible)"""
     withdrawn: list[tuple[str, str]] = field(default_factory=list)
     """The releases that are withdrawn, which are not built"""
+    externals: list[str] = field(default_factory=list)
+    """Crates whose external manifest the PR changes"""
 
 
 def repository(url: str, archive: bool) -> str:
@@ -185,6 +187,7 @@ def evaluate(author: str) -> Eligibility:
     automatically."""
     releases = []
     withdrawn = []
+    externals = []
     reasons = []
     kinds = set()
     added: dict[str, list[tuple[Version, str]]] = {}  # By crate
@@ -204,6 +207,7 @@ def evaluate(author: str) -> Eligibility:
         version = match["version"]
         if version == EXTERNAL:
             reasons.append(f"{path}: externals need a manual review")
+            externals.append(crate)
             continue
 
         try:
@@ -235,4 +239,5 @@ def evaluate(author: str) -> Eligibility:
                        kind=kinds.pop() if len(kinds) == 1 else None,
                        releases=releases,
                        reasons=reasons,
-                       withdrawn=withdrawn)
+                       withdrawn=withdrawn,
+                       externals=externals)
