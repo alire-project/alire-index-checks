@@ -58,6 +58,17 @@ it also labels, comments and merges. Merges are squashed and titled
 releases, and ` (yank)` precedes ` (auto)` for withdrawals. Its offline tests
 are in `tests/test_automerge_bot.py`.
 
+Maintainers can also have the bot merge a PR they reviewed, instead of
+approving, retitling and merging it by hand: they apply the
+`auto-merge: approved` label. The bot then merges it as if eligible, built and
+within the rate limit, one hour after the label was applied, provided there is
+no veto and all checks passed. The label only counts if it was last applied by
+someone with write access, after the PR last changed; after a change it must
+be applied again. The bot's comment lists what the approval overrides, and the
+merge is titled with ` (manual)` instead of ` (auto)`, and externals as
+`<crate> external` (PRs with neither releases nor externals keep their
+title). Approved merges do not count towards the rate limit.
+
 In both modes, each change of decision is logged as a comment in a log issue,
 as a **Dry run** entry (nothing was done) or a **Live** one (the PR was
 labeled and commented, or merged). The bot keeps one log issue per year (or
