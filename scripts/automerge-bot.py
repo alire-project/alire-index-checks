@@ -6,6 +6,7 @@ Merge eligible PRs to an Alire index automatically, as described in AEP-6
 Usage:
     automerge-bot.py --repo OWNER/NAME --base BRANCH --mode dry-run|on
                      --bot-login LOGIN [--log-period year|month|week|day]
+    automerge-bot.py --repo OWNER/NAME --review PR
 
 Meant to run periodically (see auto-merge.yml in alire-index). Each run
 decides, for every open PR to the base branch, whether to:
@@ -49,8 +50,13 @@ Environment:
     GH_TOKEN  Token for the GitHub API (read access to the repository; write
               access to issues, and to pull requests and contents in on mode)
 
+With --review, only one PR is decided, as if out of draft, and the decision
+is printed, without logging nor touching anything. It runs in a checkout of
+the PR merge commit instead (as checks do, see diff-release.sh), from a
+workflow of the PR whose own checks are left out (GITHUB_RUN_ID).
+
 Exit status:
-    0  every PR was processed
+    0  every PR was processed (or reviewed)
     1  some PR could not be processed, or the run stopped early (when the
        base branch cannot be fetched after a merge, or comments or issues
        are not posted as --bot-login); see the summary and the log
@@ -131,6 +137,9 @@ BUILD_SUCCESSES = {"built", "fetched"}
 BUILT = "built or fetched"
 MISSING = "missing dependencies"
 FAILED = "failed"
+
+# Reason given while checks run, with those not completed as its details
+WAITING = "waiting for checks to complete"
 
 # Name of the summary job of each build workflow, e.g. "native / all", which
 # fails when any of its platforms does (see WORKFLOWS.md in alire-index)
@@ -410,11 +419,17 @@ def decide(pr: PullRequest, data: PRData, now: datetime) -> Decision:
               and check.conclusion not in PASSING]
     running = (not checks
                or any(check.status != "completed" for check in checks))
+    waiting = [WAITING] if running else []
+    details: dict[str, list[str]] = {}
+    unfinished = [compact(check.name) for check in checks
+                  if check.status != "completed"]
+    if unfinished:
+        details[WAITING] = [grouped(unfinished, {compact(check.name)
+                                                 for check in checks})]
 
     # Builds are reported, and required of every new release, once all the
     # checks ended
     builds = []
-    details: dict[str, list[str]] = {}
     unreported = []
     unbuilt = False
     failures: set[str] = set()  # Platforms with a reported build failure
@@ -460,12 +475,12 @@ def decide(pr: PullRequest, data: PRData, now: datetime) -> Decision:
             details[approved] = overridden
         merge_after = approved_at + COOLING_OFF
         if problems or failed:
-            return Decision(MANUAL, [approved, *problems, *builds],
+            return Decision(MANUAL, [approved, *problems, *waiting,
+                                     *builds],
                             eligibility, details=details)
         if running:
-            return Decision(PENDING,
-                            [approved, "waiting for checks to complete"],
-                            eligibility, merge_after, details, approver)
+            return Decision(PENDING, [approved, WAITING], eligibility,
+                            merge_after, details, approver)
         if now < merge_after:
             return Decision(COOLING, [
                 approved, f"cooling off: {duration(merge_after - now)} left"],
@@ -477,11 +492,10 @@ def decide(pr: PullRequest, data: PRData, now: datetime) -> Decision:
 
     problems = eligibility.reasons + problems + unreported
     if problems or failed or unbuilt:
-        return Decision(MANUAL, problems + builds, eligibility,
+        return Decision(MANUAL, problems + waiting + builds, eligibility,
                         details=details)
     if running:
-        return Decision(PENDING, ["waiting for checks to complete"],
-                        eligibility)
+        return Decision(PENDING, [WAITING], eligibility, details=details)
 
     passed = f"all {len(checks)} checks passed"
     if eligibility.kind != RELEASES:
@@ -533,8 +547,10 @@ def marker(pr: PullRequest, decision: Decision,
             f"action={decision.action}{in_mode} -->")
 
 
-def describe(decision: Decision) -> str:
-    """Return a Markdown description of a decision."""
+def describe(decision: Decision,
+             escape: Callable[[str], str] = neutralize) -> str:
+    """Return a Markdown description of a decision, with reasons escaped for
+    comments (for the log of a review, as is)."""
     releases = (decision.eligibility.releases
                 if decision.eligibility else [])
     lines = []
@@ -542,8 +558,8 @@ def describe(decision: Decision) -> str:
         lines.append("Releases: " + ", ".join(f"`{crate}={version}`"
                                               for crate, version in releases))
     for reason in decision.reasons:
-        lines.append(f"- {neutralize(reason)}")
-        lines += [f"  - {neutralize(detail)}"
+        lines.append(f"- {escape(reason)}")
+        lines += [f"  - {escape(detail)}"
                   for detail in decision.details.get(reason, [])]
     return "\n".join(lines)
 
@@ -568,20 +584,27 @@ def commit_title(pr: PullRequest, decision: Decision) -> str:
     return f"{crate} {version}{more}{yank}{by} (#{pr.number})"
 
 
+def verdict(decision: Decision, merged: bool) -> str:
+    """Return what a decision means for its PR, e.g. "needs a manual
+    review", for a PR `merged` or not if the decision is to merge."""
+    basis = "approved" if decision.approved_by else "eligible"
+    if decision.action == MANUAL:
+        return "needs a manual review"
+    elif decision.action == PENDING:
+        return f"is {basis} and waiting for its checks to complete"
+    elif decision.action == COOLING:
+        return (f"is {basis} and cooling off until "
+                f"{decision.merge_after:%Y-%m-%d %H:%M} UTC")
+    elif decision.action == SKIP:
+        return "is skipped"
+    return "was merged" if merged else "would be merged"
+
+
 def log_entry(pr: PullRequest, decision: Decision, mode: str) -> str:
     """Return the log issue comment for a new decision, which says whether
     it had any effect. The PR is not linked nor its author mentioned, so that
     neither is notified."""
-    basis = "approved" if decision.approved_by else "eligible"
-    if decision.action == MANUAL:
-        headline = "needs a manual review"
-    elif decision.action == PENDING:
-        headline = f"is {basis} and waiting for its checks to complete"
-    elif decision.action == COOLING:
-        headline = (f"is {basis} and cooling off until "
-                    f"{decision.merge_after:%Y-%m-%d %H:%M} UTC")
-    else:
-        headline = "was merged" if mode == "on" else "would be merged"
+    headline = verdict(decision, merged=mode == "on")
 
     if mode == "on":
         prefix = "**Live**"
@@ -741,21 +764,26 @@ class LivePRData:
     """PRData from GitHub, cached for the duration of a run."""
 
     def __init__(self, gh: GitHub, git_dir: str, pr: PullRequest,
-                 merged_in_run: dict[str, int]):
+                 merged_in_run: dict[str, int],
+                 ignored_suite: int | None = None):
         self.gh = gh
         self.git_dir = git_dir
         self.pr = pr
         self.merged_in_run = merged_in_run
         """Releases merged by author in this run, which searches miss"""
+        self.ignored_suite = ignored_suite
+        """Check suite left out with its check runs (a review's own)"""
         self._checks: list[CheckRun] | None = None
         self._suites: list[dict[str, Any]] | None = None
         self._timeline: list[dict[str, Any]] | None = None
 
     def suites(self) -> list[dict[str, Any]]:
         if self._suites is None:
-            self._suites = self.gh.get_all(
-                f"/repos/{{repo}}/commits/{self.pr.head_sha}/check-suites",
-                key="check_suites")
+            self._suites = [
+                suite for suite in self.gh.get_all(
+                    f"/repos/{{repo}}/commits/{self.pr.head_sha}"
+                    f"/check-suites", key="check_suites")
+                if suite["id"] != self.ignored_suite]
         return self._suites
 
     def merge_problem(self) -> str | None:
@@ -793,9 +821,13 @@ class LivePRData:
 
     def checks(self) -> list[CheckRun]:
         if self._checks is None:
-            runs = self.gh.get_all(
-                f"/repos/{{repo}}/commits/{self.pr.head_sha}/check-runs",
-                params={"filter": "latest"}, key="check_runs")
+            runs = [
+                run for run in self.gh.get_all(
+                    f"/repos/{{repo}}/commits/{self.pr.head_sha}/check-runs",
+                    params={"filter": "latest"}, key="check_runs")
+                if self.ignored_suite is None
+                or (run.get("check_suite") or {}).get("id")
+                != self.ignored_suite]
             self._checks = [
                 CheckRun(run["id"], run["name"], run["status"],
                          run["conclusion"])
@@ -883,6 +915,16 @@ class LivePRData:
                         and match["version"] != EXTERNAL):
                     count += 1
         return count + self.merged_in_run.get(author, 0)
+
+
+class CheckoutPRData(LivePRData):
+    """LivePRData of a PR whose merge commit is checked out (in reviews)."""
+
+    def merge_problem(self) -> str | None:
+        return None  # Already merged
+
+    def eligibility(self) -> Eligibility:
+        return evaluate(self.pr.author)
 
 
 # --- Effects
@@ -1117,17 +1159,45 @@ def process(prs: list[dict[str, Any]],
     return rows, errors
 
 
+def review(gh: GitHub, number: int, now: datetime) -> str:
+    """Return the review of PR `number`: what the bot would decide now, were
+    it out of draft. The PR merge commit must be checked out, as HEAD."""
+    pr = pull_request(gh.request("GET", f"/repos/{{repo}}/pulls/{number}"))
+    draft = pr.draft
+    pr.draft = False
+    # The head that was checked out, even if the PR changed since
+    pr.head_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD^2"], check=True, capture_output=True,
+        text=True).stdout.strip()
+
+    run = os.environ.get("GITHUB_RUN_ID")
+    own = (gh.request("GET", f"/repos/{{repo}}/actions/runs/{run}")
+           ["check_suite_id"] if run else None)
+    decision = decide(pr, CheckoutPRData(gh, "", pr, {}, own), now)
+    return (f"Auto-merge review: PR {pr.number}"
+            f"{' (as if out of draft)' if draft else ''} "
+            f"{verdict(decision, merged=False)}.\n"
+            f"{describe(decision, escape=lambda text: text)}\n")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--repo", required=True)
-    parser.add_argument("--base", required=True)
-    parser.add_argument("--mode", required=True, choices=["dry-run", "on"])
-    parser.add_argument("--bot-login", required=True)
+    parser.add_argument("--base")
+    parser.add_argument("--mode", choices=["dry-run", "on"])
+    parser.add_argument("--bot-login")
     parser.add_argument("--log-period", choices=PERIODS, default="year")
+    parser.add_argument("--review", type=int, metavar="PR")
     args = parser.parse_args()
 
     gh = GitHub(args.repo, os.environ["GH_TOKEN"])
     now = datetime.now(timezone.utc)
+    if args.review:
+        print(review(gh, args.review, now))
+        return 0
+    if not (args.base and args.mode and args.bot_login):
+        parser.error("--base, --mode and --bot-login are required, "
+                     "unless with --review")
     issue = open_log(gh, args.bot_login, log_title(args.log_period, now))
     bot = Bot(gh, args.mode, args.bot_login, issue)
 
